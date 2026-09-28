@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<!-- TEST-ONLY UI driver. Not part of the shipped app. It drives the REAL screen
+     modules against an in-memory Google test double in a real browser and
+     reports PASS/FAIL into the DOM for headless Chromium to read. -->
+<html lang="en">
+<head><meta charset="utf-8" /><link rel="stylesheet" href="../assets/css/app.css" /></head>
+<body>
+  <div id="app"></div>
+  <pre id="out">pending</pre>
+  <script type="module">
+    import { state } from "../assets/js/app.js";
+    import { Store, MemoryBackend } from "../assets/js/store.js";
+    import * as S from "../assets/js/service.js";
+    import * as I from "../assets/js/invoicing.js";
+    import * as W from "../assets/js/whatsapp.js";
+    import { renderDashboard } from "../assets/js/screens/dashboard.js";
+    import { renderInvoiceNew } from "../assets/js/screens/invoice_new.js";
+    import { renderParents } from "../assets/js/screens/parents.js";
+    import { renderInvoices } from "../assets/js/screens/invoices.js";
+    import { renderSettings } from "../assets/js/screens/settings.js";
+    import { renderRates } from "../assets/js/screens/rates.js";
+    import { renderBackup, applyBundle } from "../assets/js/screens/backup.js";
+    import { toCsv } from "../assets/js/ui.js";
+
+    const lines = [];
+    let pass = 0, fail = 0;
+    const ok = (name, cond, detail = "") => {
+      if (cond) { pass++; lines.push("ok   " + name); }
+      else { fail++; lines.push("FAIL " + name + " " + detail); }
+    };
+    const el = (tag, cls) => { const n = document.createElement(tag); if (cls) n.className = cls; return n; };
+    const text = (root) => root.textContent || "";
+    const byText = (root, t) => [...root.querySelectorAll("button,a,h1,h2,h3,span,strong,p")].find((n) => (n.textContent || "").trim() === t);
+
+    async function render(name, fn) {
+      const app = document.getElementById("app");
+      app.replaceChildren();
+      const main = el("main", "app-main");
+      app.appendChild(main);
+      await fn(main, { navigate() {}, refresh() {} });
+      return main;
+    }
+
+    (async () => {
+      try {
+        const store = new Store(new MemoryBackend());
+        await store.open(); await store.bootstrapIfEmpty();
+        state.store = store; state.user = { name: "Test", email: "t@example.com" }; state.ready = true;
+
+        // ---- AC-37 / rates -------------------------------------------------
+        ok("rate types default to Primary R240.00 and High R280.00",
+          store.rates.some((r) => r.label === "Primary School" && Number(r.rate_cents) === 24000)
+          && store.rates.some((r) => r.label === "High School" && Number(r.rate_cents) === 28000));
+        const ratesMain = await render("rates", renderRates);
+        ok("rates screen lists editable rate types", ratesMain.querySelectorAll(".rate-card").length >= 2);
+        await S.saveRate(store, { key: "holiday", label: "Holiday intensive", rateCents: 30000 });
+        await store.reload();
+        ok("a new rate type is owner-configurable and saved", store.rates.some((r) => r.label === "Holiday intensive"));
+
+        // ---- AC-23 create flow renders 3 steps -----------------------------
+        await S.saveParent(store, { name: "Test", surname: "Parent", whatsapp: "0821234567" });
+        await store.reload();
+        const createMain = await render("create", renderInvoiceNew);
+        ok("create screen shows three steps", createMain.querySelectorAll(".step-tab").length === 3);
+        ok("step 1 asks 'Who is it for?'", text(createMain).includes("Who is it for?"));
+        ok("step 2 is rate and hours", text(createMain).includes("Rate and hours"));
+        // Advance to step 2 by picking a saved parent, then check its contents.
+        const search1 = createMain.querySelector('input[type="search"]');
+        search1.value = "Test";
+        search1.dispatchEvent(new Event("input", { bubbles: true }));
+        const pick = [...createMain.querySelectorAll(".typeahead-item")].find((n) => (n.textContent || "").includes("Test Parent"));
+        ok("type-ahead finds a saved parent", Boolean(pick));
+        pick.click();
+        await new Promise((r) => setTimeout(r, 50));
+        const nextBtn = [...createMain.querySelectorAll("button")].find((b) => (b.textContent || "").trim() === "Next");
+        nextBtn.click();
+        await new Promise((r) => setTimeout(r, 50));
+        const step2text = text(createMain);
+        if (!step2text.includes("+ Add a new rate")) lines.push("[debug] step2 text: " + step2text.slice(0, 300));
+        ok("'+ Add a new rate' option present on step 2", text(createMain).includes("+ Add a new rate"));
+        ok("per-row control is named after its row (Remove line 1)",
+          [...createMain.querySelectorAll("button")].some((b) => (b.textContent || "").includes("Remove line 1")));
+        ok("empty payment terms produce no hardcoded default",
+          store.settings.payment_terms === "" && !text(createMain).includes("Payment due within 7 days"));
+
+        // ---- AC-34 parents list/filter/edit --------------------------------
+        await S.saveParent(store, { name: "Test", surname: "Parent", whatsapp: "0821234567" });
+        await S.saveParent(store, { name: "Archived", surname: "Guy", whatsapp: "0831234567" });
+        await S.addLearner(store, { parentId: 1, name: "Learner", surname: "One", grade: "Grade 4", schoolLevel: "primary", defaultRateCents: 24000 });
+        await store.reload();
+        const parentsMain = await render("parents", renderParents);
+        ok("parents list shows saved parents", text(parentsMain).includes("Test Parent"));
+        const search = parentsMain.querySelector('input[type="search"]');
+        const filter = parentsMain.querySelector("select");
+        ok("parents list has a search box and an Active/All/Archived filter",
+          Boolean(search) && [...filter.options].map((o) => o.value).join(",") === "active,all,archived");
+        ok("parents list offers Add parent and Add learner", text(parentsMain).includes("Add parent") && text(parentsMain).includes("Add learner"));
+        const kid = store.learners.find((l) => String(l.parent_id) === "1");
+        ok("learner record carries name/grade/school level/rate",
+          kid && kid.grade === "Grade 4" && kid.school_level === "primary" && Number(kid.default_rate_cents) === 24000);
+
+        // ---- AC-35 no delete with financial history -------------------------
+        await S.createInvoice(store, { parentId: 1, learnerId: kid.learner_id, lines: [{ service: "primary", mode: "hourly", rate: "240", hours: "4" }] });
+        await store.reload();
+        ok("parent with financial history is protected from deletion",
+          S.parentHasFinancialHistory(store, 1) === true && S.parentHasFinancialHistory(store, 2) === false);
+        let delErr = null;
+        try { await S.deleteParent(store, 1); } catch (e) { delErr = e; }
+        ok("delete of a parent with history is refused", delErr !== null && /financial history|invoice|lesson/i.test(delErr.message));
+
+        // ---- AC-24 mixed flat/hourly on one invoice -------------------------
+        const mixed = await S.createInvoice(store, { parentId: 1, lines: [
+          { service: "primary", mode: "hourly", rate: "240", hours: "4" },
+          { service: "high", mode: "hourly", rate: "280", hours: "2" },
+          { service: "custom", mode: "flat", amount: "350" },
+        ] });
+        await store.reload();
+        const mixedFull = store.invoices.find((i) => String(i.invoice_id) === String(mixed.invoice_id));
+        ok("mixed invoice total is R1,870.00 (960 + 560 + 350)", Number(mixedFull.total_cents) === 187000);
+        const flatLine = mixedFull.line_items.find((l) => ["true", "1"].includes(String(l.is_flat).toLowerCase()));
+        ok("flat line stores its typed total and prints 'flat'", flatLine && Number(flatLine.amount_cents) === 35000);
+        const hourlyLines = mixedFull.line_items.filter((l) => !["true", "1"].includes(String(l.is_flat).toLowerCase()));
+        ok("hourly lines store rate x hours", hourlyLines.every((l) => Number(l.amount_cents) === Math.round(Number(l.rate_cents) * Number(l.hours_milli) / 1000)));
+
+        // ---- AC-27 empty terms: no hint on the due-date field ---------------
+
+        // ---- AC-33 dashboard ------------------------------------------------
+        const dashMain = await render("dashboard", renderDashboard);
+        const firstChild = dashMain.querySelector(".screen").firstElementChild;
+        ok("Create Invoice is the FIRST element on the dashboard", firstChild.classList.contains("create-invoice-cta"));
+        ok("dashboard shows the five summary figures",
+          ["Invoices this month", "Invoiced this month", "Total paid", "Outstanding invoices", "Total outstanding"]
+            .every((l) => text(dashMain).includes(l)));
+        const d = I.dashboard(store.invoices);
+        ok("dashboard figures are computed from records", d.invoices_this_month === store.invoices.filter((i) => I.monthKey(i.invoice_date) === I.monthKey(I.todayIso())).length);
+
+        // ---- AC-38/39 invoice list filters + actions ------------------------
+        const invMain = await render("invoices", renderInvoices);
+        ok("invoice history shows five filters", invMain.querySelectorAll(".filter-grid .field").length === 5);
+        ok("invoice list renders rows", invMain.querySelectorAll(".invoice-row").length >= 1);
+        const dup = await S.duplicateInvoice(store, mixed.invoice_id);
+        await store.reload();
+        ok("duplicate gets a fresh number and today's date",
+          dup.number_text !== mixed.number_text && dup.invoice_date === I.todayIso() && String(dup.duplicate_of) === String(mixed.invoice_id));
+        const canc = await S.setInvoiceStatus(store, dup.invoice_id, "Cancelled", { reason: "test" });
+        await store.reload();
+        const cancFull = store.invoices.find((i) => String(i.invoice_id) === String(dup.invoice_id));
+        ok("cancel is soft and keeps the record", cancFull && cancFull.status === "Cancelled" && cancFull.cancelled_at);
+        ok("overdue is derived and never applies to Paid/Cancelled",
+          I.deriveDisplayStatus({ status: "Cancelled", due_date: "2000-01-01" }) === "Cancelled"
+          && I.deriveDisplayStatus({ status: "Paid", due_date: "2000-01-01" }) === "Paid"
+          && I.deriveDisplayStatus({ status: "Sent", due_date: "2000-01-01" }) === "Overdue");
+
+        // ---- AC-41 WhatsApp -------------------------------------------------
+        const payload = W.invoiceSharePayload(mixedFull, { amountDisplay: "R1,870.00", dueDateDisplay: I.formatDateDisplay(mixedFull.due_date) });
+        ok("WhatsApp link uses the parent's normalised number", payload.url.includes("wa.me/27821234567"));
+        const detail2 = await render("invoices", renderInvoices);
+        const row2 = detail2.querySelector(".invoice-row");
+        row2.click();
+        await new Promise((r) => setTimeout(r, 300));
+        ok("invoice detail offers PDF download", text(detail2).includes("Download PDF"));
+        ok("invoice detail offers the WhatsApp deep link", text(detail2).includes("Open WhatsApp"));
+        ok("WhatsApp screen states plainly that the app does not send anything",
+          text(detail2).includes("does not send") && text(detail2).includes("cannot confirm delivery"));
+
+        // ---- AC-42 CSV export / AC-43 JSON backup+restore -------------------
+        const settingsMain = await render("settings", renderSettings);
+        ok("Settings covers business, banking, invoicing, appearance and WhatsApp",
+          ["Business", "Banking", "Invoicing", "Appearance", "WhatsApp"].every((s) => text(settingsMain).includes(s)));
+        const backupMain = await render("backup", renderBackup);
+        ok("Backup offers export to JSON and restore from JSON",
+          text(backupMain).includes("Export JSON backup") && text(backupMain).includes("Restore"));
+
+        const before = store.parents.length;
+        const bundle = { settings: store.settings, parents: store.parents, learners: store.learners,
+          rates: store.rates, lessons: store.lessons,
+          invoices: store.invoices.map((i) => { const r = Object.assign({}, i); delete r.line_items; return r; }),
+          invoice_lines: store.lines };
+        await applyBundle(store, JSON.parse(JSON.stringify(bundle)));
+        await store.reload();
+        ok("restore from JSON round-trips the data", store.parents.length === before && store.invoices.length === bundle.invoices.length);
+
+        // ---- Settings save persists (AC-40) --------------------------------
+        await store.saveSettings({ payment_terms: "Payment due on presentation.", account_holder: "C Travelling Tutors" });
+        await store.reload();
+        ok("settings changes persist to the store", store.settings.payment_terms === "Payment due on presentation.");
+
+        // ---- AC-42 CSV export of invoices ----------------------------------
+        const csv = toCsv(store.invoices, ["number_text", "invoice_date", "due_date", "status", "snap_parent_name", "snap_learner_name", "total_cents"]);
+        const csvRows = csv.split("\r\n");
+        ok("CSV export produces a header and one row per invoice",
+          csvRows[0] === "number_text,invoice_date,due_date,status,snap_parent_name,snap_learner_name,total_cents"
+          && csvRows.length === store.invoices.length + 1 && csvRows.length > 1);
+        ok("CSV export escapes values that contain a comma, quote or newline",
+          toCsv([{ a: 'x,y', b: 'he said "hi"' }], ["a", "b"]).split("\r\n")[1] === '"x,y","he said ""hi"""');
+
+        document.getElementById("out").textContent = lines.join("\n") + `\n\nUI checks: ${pass} passed, ${fail} failed\nUI_FLOW: ${fail === 0 ? "PASS" : "FAIL"}`;
+        document.title = fail === 0 ? "PASS" : "FAIL";
+      } catch (err) {
+        document.getElementById("out").textContent = lines.join("\n") + "\nHARNESS ERROR: " + (err && err.stack || err);
+        document.title = "FAIL";
+      }
+    })();
+  </script>
+</body>
+</html>

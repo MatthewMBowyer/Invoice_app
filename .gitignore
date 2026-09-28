@@ -1,0 +1,10 @@
+# Build/test artefacts
+__pycache__/
+*.pyc
+
+# Never ship real client data or generated output — the discipline carried over
+# from the Python app (no data/gsheets, no sqlite, no output/ in the repo).
+data/
+data/gsheets/
+data/*.sqlite3
+output/

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0097b2" />
+  <meta name="description" content="Create tutoring invoices and keep them in your own Google Drive." />
+  <title>Chloe's Travelling Tutors — Invoices</title>
+
+  <!-- Every path below is RELATIVE: the site is served from the /Invoice_app/
+       subdirectory on GitHub Pages, so a root-absolute path would 404. -->
+  <link rel="icon" type="image/png" href="assets/img/CTT_logo_cropped.png" />
+  <link rel="stylesheet" href="assets/css/app.css" />
+</head>
+<body>
+  <div id="app" aria-live="polite"></div>
+
+  <!-- Vendored, client-side PDF library (pdf-lib, UMD build). No build step,
+       no server, no secret. Loaded before the app module so window.PDFLib is set. -->
+  <script src="lib/pdf-lib.min.js"></script>
+
+  <!-- Google Identity Services (browser token flow; needs no client secret). -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+
+  <script type="module" src="assets/js/app.js"></script>
+</body>
+</html>

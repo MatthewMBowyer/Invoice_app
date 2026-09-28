@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<!-- TEST-ONLY measurement harness. Not part of the shipped app. It renders the
+     REAL screens with the REAL stylesheet against an in-memory Google test
+     double, then reports overflow and tap-target measurements into the DOM so a
+     headless Chromium can read them with --dump-dom. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="../assets/css/app.css" />
+  <style>#app{}</style>
+</head>
+<body>
+  <div id="app"></div>
+  <pre id="result">pending</pre>
+  <script type="module">
+    import { state } from "../assets/js/app.js";
+    import { Store, MemoryBackend } from "../assets/js/store.js";
+    import * as S from "../assets/js/service.js";
+    import { renderDashboard } from "../assets/js/screens/dashboard.js";
+    import { renderInvoiceNew } from "../assets/js/screens/invoice_new.js";
+    import { renderParents } from "../assets/js/screens/parents.js";
+    import { renderInvoices } from "../assets/js/screens/invoices.js";
+    import { renderSettings } from "../assets/js/screens/settings.js";
+    import * as INV from "../assets/js/invoicing.js";
+
+    function interactive() {
+      return [...document.querySelectorAll("button, input, select, textarea, a")]
+        .filter((node) => node.offsetParent !== null || node.getClientRects().length);
+    }
+    function measure(tag) {
+      const doc = document.documentElement;
+      const small = interactive().map((n) => {
+        const r = n.getBoundingClientRect();
+        return { tag: n.tagName, label: (n.textContent || n.getAttribute("aria-label") || "").trim().slice(0, 24), h: Math.round(r.height), w: Math.round(r.width) };
+      }).filter((s) => s.h >= 0 && s.w > 0 && (s.h < 44 || s.w < 44));
+      const wide = [...document.querySelectorAll("*")].map((n) => {
+        const r = n.getBoundingClientRect();
+        return { sel: n.tagName + (n.className ? "." + String(n.className).split(" ")[0] : ""), right: Math.round(r.right), left: Math.round(r.left), w: Math.round(r.width) };
+      }).filter((s) => s.right > doc.clientWidth + 0.5 || s.left < -0.5).slice(0, 8);
+      return {
+        tag,
+        viewport: window.innerWidth,
+        clientWidth: doc.clientWidth,
+        scrollWidth: doc.scrollWidth,
+        noHorizontalScroll: doc.scrollWidth <= doc.clientWidth,
+        smallTargets: small,
+        wide,
+      };
+    }
+    async function run(tag) {
+      const app = document.getElementById("app");
+      const params = new URLSearchParams(location.search);
+      const only = params.get("screen");
+      const out = [];
+      const screens = {
+        dashboard: renderDashboard, create: renderInvoiceNew, parents: renderParents,
+        invoices: renderInvoices, settings: renderSettings,
+      };
+      for (const [name, fn] of Object.entries(screens)) {
+        if (only && only !== name) continue;
+        app.replaceChildren();
+        const main = document.createElement("main");
+        main.className = "app-main";
+        app.appendChild(main);
+        try { await fn(main, { navigate() {}, refresh() {} }); } catch (e) { main.textContent = "ERR " + e.message; }
+        out.push(measure(name));
+      }
+      document.getElementById("result").textContent = JSON.stringify({ requested: tag, screens: out });
+      document.getElementById("result").style.display = only ? "none" : "block";
+      document.title = "measured";
+    }
+    (async () => {
+      const store = new Store(new MemoryBackend());
+      await store.open(); await store.bootstrapIfEmpty();
+      await S.saveParent(store, { name: "Test Parent", whatsapp: "0821234567", email: "t@example.com" });
+      await S.addLearner(store, { parentId: 1, name: "Learner", surname: "One", grade: "Grade 4", schoolLevel: "primary", defaultRateCents: 24000 });
+      await store.reload();
+      await S.createInvoice(store, { parentId: 1, learnerId: 1, lines: [
+        { service: "primary", mode: "hourly", rate: "240", hours: "4" },
+        { service: "high", mode: "hourly", rate: "280", hours: "2" },
+      ], status: "Sent" });
+      await S.createInvoice(store, { parentId: 1, lines: [{ service: "custom", mode: "flat", amount: "350" }] });
+      await store.reload();
+      state.store = store; state.user = { name: "Test", email: "t@example.com" }; state.ready = true;
+      void INV;
+      await run(new URLSearchParams(location.search).get("w") || "?");
+    })();
+  </script>
+</body>
+</html>
