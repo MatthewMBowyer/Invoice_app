@@ -39,16 +39,20 @@ Drive as a Google Sheet.
   **repository root**, and the served `index.html` is byte-identical to the
   committed one. The repository is **not** empty — the earlier "still empty / not
   yet live" note was stale and has been corrected.
-- **The Pages workflow is committed.** `.github/workflows/pages.yml` ("Deploy to
-  GitHub Pages") **is** in the delivered repository (`git ls-tree -r HEAD`
-  contains it; the raw URL
-  `raw.githubusercontent.com/.../main/.github/workflows/pages.yml` returns 200),
-  so it publishes on every push to `main`. It had been absent because a local
-  `.git/info/exclude` line hid it; that line is removed and the file is committed.
+- **The Pages workflow** `.github/workflows/pages.yml` ("Deploy to GitHub Pages")
+  is committed in the local delivery tree with the content the site needs, and it
+  is **pasted in full inside `docs/PUBLISH.md`**. It is the one deliverable **not
+  yet on the remote**: GitHub refuses any write to a path under
+  `.github/workflows/` unless the credential carries the `workflow` scope, and the
+  build environment's token does not have it (`git push` is rejected with
+  "*refusing to allow a Personal Access Token to create or update workflow
+  `.github/workflows/pages.yml` without `workflow` scope*"). Adding the file via
+  the GitHub web UI is a single owner action — see **`docs/PUBLISH.md` §A**. Until
+  then the site is served by GitHub's own branch-deployment bot.
 - **The repository setting is configured.** **Settings → Pages → Build and
   deployment → Source** is set to **"GitHub Actions"** (`build_type: workflow` on
-  the Pages API), so the committed workflow — not the legacy branch bot — drives
-  deployment. See `docs/PUBLISH.md` for the owner confirmation step.
+  the Pages API), so once the workflow file is present it — not the legacy branch
+  bot — drives deployment.
 - **Served from the repository root.** `index.html` sits at the root and the
   workflow uploads the repository root (`path: .`) with
   `actions/upload-pages-artifact@v3`, deployed by `actions/deploy-pages@v4`.
@@ -207,9 +211,11 @@ one.
    into invoice lines automatically (the reference's uninvoiced-lessons screen is
    dropped, §7). If Chloe wants to tick stored lessons and have them become
    invoice lines, that is a small addition. **Default: not built.**
-2. **Pages source setting.** The owner must set **Settings → Pages → Source =
-   "GitHub Actions"** once, so the workflow's deployment is used. **Default: the
-   workflow assumes it.**
+2. **Add the workflow file, and confirm the Pages source.** The workflow file
+   `.github/workflows/pages.yml` still needs one owner upload (see §2 and
+   `docs/PUBLISH.md` §A), and **Settings → Pages → Source = "GitHub Actions"**
+   must be the source. **Default: the Pages source is already set to "GitHub
+   Actions"; only the file upload remains.**
 3. **The live Google proof.** Item 1 of the definition of done needs a real Google
    account and interactive consent. Someone must run
    `docs/OWNER_LIVE_VERIFICATION.md` and report. **Default: unproven until run.**
