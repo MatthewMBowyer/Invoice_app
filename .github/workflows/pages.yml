@@ -1,0 +1,42 @@
+name: Deploy to GitHub Pages
+
+# Publishes the app on every push to main. GitHub Pages serves STATIC files only:
+# there is no server, no build step and no secret in this workflow.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      # The site is served from the REPOSITORY ROOT (index.html is at the root).
+      # In the repository settings, Pages -> Build and deployment -> Source must
+      # be set to "GitHub Actions".
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
