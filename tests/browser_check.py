@@ -39,6 +39,11 @@ class PrefixedHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *args):  # keep the console quiet
         pass
 
+    def handle_error(self, request, client_address):
+        # Chromium closes idle connections while --dump-dom is still finishing,
+        # which raises a harmless BrokenPipeError; do not print a traceback.
+        pass
+
 
 def start_server(root: Path):
     handler = lambda *a, **k: PrefixedHandler(*a, directory=str(root), **k)
@@ -132,23 +137,72 @@ def main() -> int:
         if not report["boots"]:
             failures += 1
 
-        # Widths.
+        # Widths. Headless Chromium clamps its window to a ~500px minimum, so a
+        # --window-size=390 does NOT lay out at 390px. Load the iframe wrapper
+        # (tests/viewport_probe.html) at a comfortable window: it frames the real
+        # measurement harness in same-origin iframes sized 390/414/768/1280, so the
+        # inner layout viewport really is the requested width.
         widths = [390, 414, 768, 1280]
         measurements = {}
-        for w in widths:
-            dom = chromium_dump(base + f"tests/measure.html?w={w}", w, budget=7000)
-            m = re.search(r'<pre id="result">(.*?)</pre>', dom, re.S)
-            raw = m.group(1) if m else ""
+        dom = chromium_dump(base + "tests/viewport_probe.html", 1400, budget=15000)
+        # The probe writes '<pre id="result">...</pre>' but may add a style attr;
+        # allow for it, and require a real payload rather than a vacuous empty one.
+        m = re.search(r'<pre id="result"[^>]*>(.*?)</pre>', dom, re.S)
+        if not m or not m.group(1).strip():
+            report["measurements"] = {"raw": "", "error": "no <pre id=result> payload found"}
+            failures += 1
+            print("viewport probe: NO PAYLOAD (harness could not be read)")
+        else:
+            raw = m.group(1)
             raw = raw.replace("&quot;", '"').replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
             try:
-                measurements[w] = json.loads(raw)
+                payload = json.loads(raw)
+                per_width = payload.get("perWidth", {})
             except Exception:
-                measurements[w] = {"raw": raw[:500]}
-        report["measurements"] = measurements
+                per_width = {}
+                report["viewport_probe_raw"] = raw[:500]
+            for w in widths:
+                data = per_width.get(str(w))
+                if not data or not data.get("screens"):
+                    measurements[w] = data if isinstance(data, dict) else {"raw": str(data)}
+                    failures += 1
+                    print(f"measurement at {w}px: no screens measured")
+                else:
+                    measurements[w] = data
+            report["measurements"] = measurements
+
+        # A vacuous PASS is the exact defect being fixed: assert each width really
+        # produced measured screens with integer scrollWidth/clientWidth so the
+        # check genuinely fails on a broken harness.
+        measured_screens = 0
+        for w, data in measurements.items():
+            screens = data.get("screens") if isinstance(data, dict) else None
+            if not screens:
+                failures += 1
+                print(f"measurement at {w}px: no screens measured")
+                continue
+            for screen in screens:
+                if not isinstance(screen.get("scrollWidth"), int) or not isinstance(screen.get("clientWidth"), int):
+                    failures += 1
+                    print(f"measurement at {w}px screen {screen.get('tag')}: missing integer widths")
+                    continue
+                # A vertical scrollbar legitimately shaves ~15px off clientWidth;
+                # the clamp to guard against is headless Chromium's ~500px window
+                # minimum (e.g. 390 -> 500), so require clientWidth within [w-20, w].
+                cw = screen.get("clientWidth")
+                if cw > w or (w - cw) > 20:
+                    failures += 1
+                    print(f"measurement at {w}px screen {screen.get('tag')}: clientWidth {cw} outside [{w-20},{w}] (viewport clamped)")
+                    continue
+                measured_screens += 1
+        report["measured_screens"] = measured_screens
+        print(f"measured screens across all widths: {measured_screens}")
+        if measured_screens == 0:
+            failures += 1
 
         all_no_scroll = True
         for w, data in measurements.items():
-            for screen in data.get("screens", []):
+            for screen in (data.get("screens") or []):
                 if not screen.get("noHorizontalScroll", False):
                     all_no_scroll = False
         report["no_horizontal_scroll_all_widths"] = all_no_scroll

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<!-- TEST-ONLY viewport probe. Headless Chromium enforces a ~500px minimum
+     browser window, so a --window-size=390 measures at 500px. This wrapper frames
+     the real measurement harness (measure.html) in same-origin <iframe>s sized to
+     the exact required widths, so the inner document's layout viewport really is
+     390/414/768/1280 px. It aggregates each frame's measurement into one <pre>. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>viewport probe</title>
+  <style>iframe { border: 0; display: block; width: 100%; }</style>
+</head>
+<body>
+  <pre id="result">pending</pre>
+  <div id="frames"></div>
+  <script>
+    const widths = [390, 414, 768, 1280];
+    const host = document.getElementById("frames");
+    const frames = widths.map((w) => {
+      const f = document.createElement("iframe");
+      f.style.width = w + "px";
+      f.style.height = "1600px";
+      f.dataset.w = String(w);
+      f.src = "measure.html?w=" + w;
+      host.appendChild(f);
+      return f;
+    });
+    function readAll() {
+      const out = {};
+      for (const f of frames) {
+        const w = f.dataset.w;
+        try {
+          const pre = f.contentDocument.getElementById("result");
+          const txt = pre ? pre.textContent.trim() : "";
+          if (txt && txt !== "pending") out[w] = JSON.parse(txt);
+        } catch (e) {
+          out[w] = { error: String(e) };
+        }
+      }
+      return out;
+    }
+    const deadline = Date.now() + 12000;
+    (function poll() {
+      const perWidth = readAll();
+      const ready = widths.every((w) => perWidth[String(w)] && perWidth[String(w)].screens);
+      if (ready || Date.now() > deadline) {
+        document.getElementById("result").textContent =
+          JSON.stringify({ requested: "iframe", perWidth });
+        document.title = "measured";
+        return;
+      }
+      setTimeout(poll, 100);
+    })();
+  </script>
+</body>
+</html>
