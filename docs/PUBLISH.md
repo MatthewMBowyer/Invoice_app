@@ -8,28 +8,33 @@
   `/Invoice_app/` sub-path. The repository `MatthewMBowyer/Invoice_app` is
   **populated** (not empty).
 - **Pages Source is set to "GitHub Actions"** (Pages API `build_type: workflow`).
-- **One deliverable is still not on the remote:** the GitHub Actions workflow
-  file `.github/workflows/pages.yml` is committed in the local delivery tree but
-  **could not be pushed** by the build environment, because GitHub refuses any
-  write to a path under `.github/workflows/` unless the credential carries the
-  `workflow` scope, and the environment's token does not have it. This is the
-  **single owner action** in section A below. Until it is done, the site is
-  served by GitHub's own branch-deployment bot rather than by the workflow.
+- **The Pages workflow is on the remote and running.** `.github/workflows/pages.yml`
+  ("Deploy to GitHub Pages") is committed and pushed on `main` (remote HEAD
+  `dfe5841`). Its raw URL returns HTTP 200 (`sha256 949cb2a8…`), the Actions API
+  lists it as an active workflow, and the push-triggered run
+  [36590893575](https://github.com/MatthewMBowyer/Invoice_app/actions/runs/36590893575)
+  completed with conclusion **success** (job `deploy` success). A credential
+  without the GitHub `workflow` scope cannot write this path, so it was pushed over
+  SSH with a write-enabled deploy key. **No owner action remains here.**
 
-## A. Owner step: add the workflow file (one small upload)
+## A. The workflow file — already present (recovery note only)
 
-On your own machine, at <https://github.com/MatthewMBowyer/Invoice_app>:
+`.github/workflows/pages.yml` is **already committed and pushed** on `main`, and
+its run has succeeded (see "Current state" above). **No action is needed.**
+
+If the file is ever lost or reverted, it can be re-added on your own machine at
+<https://github.com/MatthewMBowyer/Invoice_app>:
 
 1. **Add file → Create new file**.
 2. Name it exactly `.github/workflows/pages.yml`.
 3. Paste the contents of the `pages.yml` shown at the end of this file, then
    **Commit changes** to `main`.
 
-That is the whole step. It needs no Git and no token — the GitHub web UI can
-create a workflow file even when a scoped automation token cannot.
+That needs no Git and no token — the GitHub web UI can create a workflow file
+even when a scoped automation token cannot.
 
-Confirm it worked: <https://github.com/MatthewMBowyer/Invoice_app/blob/main/.github/workflows/pages.yml>
-should load, and the **Actions** tab should now list **"Deploy to GitHub Pages"**.
+Confirm it is present: <https://github.com/MatthewMBowyer/Invoice_app/blob/main/.github/workflows/pages.yml>
+should load, and the **Actions** tab should list **"Deploy to GitHub Pages"**.
 
 ## B. Owner step: confirm Pages is set to GitHub Actions
 
@@ -66,7 +71,7 @@ that item stays "unproven" — it is not something the build can prove.
 - The live served `index.html` is byte-identical to the committed one, and all
   referenced assets return HTTP 200 under the `/Invoice_app/` sub-path.
 
-## The workflow file to paste
+## Reference: the workflow file content
 
 ```yaml
 name: Deploy to GitHub Pages

@@ -21,7 +21,7 @@ Drive as a Google Sheet.
 | Deliverable | Where | Notes |
 |---|---|---|
 | The app | `index.html`, `assets/`, `lib/` | ES modules, all asset paths **relative** |
-| Pages workflow | `.github/workflows/pages.yml` | committed on `main` in this delivery tree; content also embedded in `docs/PUBLISH.md` §A. Not yet on the GitHub remote — the automation token lacks the GitHub `workflow` scope; one owner web-UI upload adds it (see §2 and `docs/PUBLISH.md` §A) |
+| Pages workflow | `.github/workflows/pages.yml` | committed and **pushed** on `main` of `MatthewMBowyer/Invoice_app`; the push-triggered "Deploy to GitHub Pages" run (36590893575) completed **successfully**, and Pages Source is "GitHub Actions" (see §2) |
 | Owner guides | `README.md`, `SETUP_GOOGLE.md`, `FOR_CHLOE.md` | plain language, no code for Chloe |
 | Schema | `docs/SPREADSHEET_SCHEMA.md` | final tabs and every column |
 | Checklists | `docs/MANUAL_TEST_CHECKLIST.md`, `docs/OWNER_LIVE_VERIFICATION.md` | manual flow + the live Google proof |
@@ -40,15 +40,15 @@ Drive as a Google Sheet.
   committed one. The repository is **not** empty — the earlier "still empty / not
   yet live" note was stale and has been corrected.
 - **The Pages workflow** `.github/workflows/pages.yml` ("Deploy to GitHub Pages")
-  is committed in the local delivery tree with the content the site needs, and it
-  is **pasted in full inside `docs/PUBLISH.md`**. It is the one deliverable **not
-  yet on the remote**: GitHub refuses any write to a path under
-  `.github/workflows/` unless the credential carries the `workflow` scope, and the
-  build environment's token does not have it (`git push` is rejected with
-  "*refusing to allow a Personal Access Token to create or update workflow
-  `.github/workflows/pages.yml` without `workflow` scope*"). Adding the file via
-  the GitHub web UI is a single owner action — see **`docs/PUBLISH.md` §A**. Until
-  then the site is served by GitHub's own branch-deployment bot.
+  is **committed and pushed** on `main` of `MatthewMBowyer/Invoice_app` (remote
+  HEAD `dfe5841`), and it **has run successfully**: the push triggered run
+  [36590893575](https://github.com/MatthewMBowyer/Invoice_app/actions/runs/36590893575)
+  (event `push`, branch `main`, conclusion **success**; job `deploy` success). The
+  file returns HTTP 200 at its raw URL with the expected `sha256 949cb2a8…`, and
+  the Actions API lists it as an active workflow. (A credential without the GitHub
+  `workflow` scope cannot write this path, so it was pushed over SSH with a
+  write-enabled deploy key — see `docs/PUBLISH.md`.) The site is now published by
+  this workflow, not by GitHub's legacy branch-deployment bot.
 - **The repository setting is configured.** **Settings → Pages → Build and
   deployment → Source** is set to **"GitHub Actions"** (`build_type: workflow` on
   the Pages API), so once the workflow file is present it — not the legacy branch
@@ -211,11 +211,10 @@ one.
    into invoice lines automatically (the reference's uninvoiced-lessons screen is
    dropped, §7). If Chloe wants to tick stored lessons and have them become
    invoice lines, that is a small addition. **Default: not built.**
-2. **Add the workflow file, and confirm the Pages source.** The workflow file
-   `.github/workflows/pages.yml` still needs one owner upload (see §2 and
-   `docs/PUBLISH.md` §A), and **Settings → Pages → Source = "GitHub Actions"**
-   must be the source. **Default: the Pages source is already set to "GitHub
-   Actions"; only the file upload remains.**
+2. **Confirm the Pages source.** The workflow file `.github/workflows/pages.yml`
+   is committed and pushed, and its run has succeeded (see §2). **Settings →
+   Pages → Source = "GitHub Actions"** is already the source. **Default: done —
+   no owner action remains for publishing.**
 3. **The live Google proof.** Item 1 of the definition of done needs a real Google
    account and interactive consent. Someone must run
    `docs/OWNER_LIVE_VERIFICATION.md` and report. **Default: unproven until run.**
