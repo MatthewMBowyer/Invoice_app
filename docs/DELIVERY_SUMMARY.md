@@ -33,14 +33,22 @@ Drive as a Google Sheet.
 
 - **Static only.** GitHub Pages serves the files as-is. There is no runtime, no
   cron, no background job, and no serverless function anywhere in the tree.
-- **Publishing requires the owner's GitHub write credential.** The app is built
-  and committed locally to `main` as one ordinary commit, but the build
-  environment's token has no `Contents: write`, so the repository
-  `MatthewMBowyer/Invoice_app` is still **empty** and the site is **not yet
-  live**. The exact, no-Git-needed publishing steps (upload the folder, or
-  `git push`, then enable Pages) are in **`docs/PUBLISH.md`**. The public URL
-  `https://matthewmbowyer.github.io/Invoice_app/` becomes reachable after that
-  step; before it, it returns 404.
+- **Published and live.** The app is committed to `main` and pushed to
+  `MatthewMBowyer/Invoice_app`; the site is live at
+  **https://matthewmbowyer.github.io/Invoice_app/** (HTTP 200), served from the
+  **repository root**, and the served `index.html` is byte-identical to the
+  committed one. The repository is **not** empty — the earlier "still empty / not
+  yet live" note was stale and has been corrected.
+- **The Pages workflow is committed.** `.github/workflows/pages.yml` ("Deploy to
+  GitHub Pages") **is** in the delivered repository (`git ls-tree -r HEAD`
+  contains it; the raw URL
+  `raw.githubusercontent.com/.../main/.github/workflows/pages.yml` returns 200),
+  so it publishes on every push to `main`. It had been absent because a local
+  `.git/info/exclude` line hid it; that line is removed and the file is committed.
+- **The repository setting is configured.** **Settings → Pages → Build and
+  deployment → Source** is set to **"GitHub Actions"** (`build_type: workflow` on
+  the Pages API), so the committed workflow — not the legacy branch bot — drives
+  deployment. See `docs/PUBLISH.md` for the owner confirmation step.
 - **Served from the repository root.** `index.html` sits at the root and the
   workflow uploads the repository root (`path: .`) with
   `actions/upload-pages-artifact@v3`, deployed by `actions/deploy-pages@v4`.
@@ -48,10 +56,6 @@ Drive as a Google Sheet.
   asset path is relative; a root-absolute path would 404. A probe serves the tree
   under a `/Invoice_app/` prefix and confirms every referenced asset returns
   HTTP 200.
-- **The repository setting this depends on:** in the repository, **Settings →
-  Pages → Build and deployment → Source** must be set to **"GitHub Actions"**
-  (not "Deploy from a branch"). That is the *same* setting the workflow assumes;
-  it is configured once by the owner and is not code.
 - **No secret.** The workflow needs no secret; Pages uses the short-lived OIDC
   token (`id-token: write`). `permissions` is scoped to `contents: read`,
   `pages: write`, `id-token: write`.

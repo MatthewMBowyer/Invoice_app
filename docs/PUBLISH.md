@@ -1,70 +1,59 @@
-# Publishing the app — exact owner steps
+# Publishing the app — current state and the owner steps that remain
 
-The app code is complete and committed locally to the delivery repository
-(`MatthewMBowyer/Invoice_app`, branch `main`, one ordinary commit). Publishing it
-is a short owner action because it needs a GitHub login; the build environment has
-no write credential, so it cannot be done for you.
+**Status: PUBLISHED AND LIVE.** The app is committed and pushed to
+`MatthewMBowyer/Invoice_app` (branch `main`), and the site is served at:
 
-Everything below is done on **your own machine** (or in the GitHub web UI). You do
-not need to know Git for the web-UI route.
+**https://matthewmbowyer.github.io/Invoice_app/**
 
-## A. One-time: publish the app
+Nothing below re-publishes the app — the earlier "upload it yourself" steps are
+gone because the repository is populated and the site is live. What remains is one
+one-time repository setting, one Google Cloud step, and the live Google proof.
 
-### Option 1 — GitHub web UI (no tools)
+## A. Already done (no action needed)
 
-1. Open <https://github.com/MatthewMBowyer/Invoice_app>.
-2. **Add file → Upload files**, drag in the contents of the app folder
-   (everything except `.git`), and **Commit changes** to `main`.
-   The important thing is that `index.html` sits at the repository **root**.
-3. That is the publish step. Go to section B.
+- The whole app is committed to `main` as ordinary, non-force commits.
+  `index.html` sits at the repository **root** and every asset path is relative,
+  so the `/Invoice_app/` sub-path works.
+- **The Pages workflow is committed.** `.github/workflows/pages.yml`
+  ("Deploy to GitHub Pages") is in the repository and publishes on every push to
+  `main`. Confirm at
+  <https://github.com/MatthewMBowyer/Invoice_app/blob/main/.github/workflows/pages.yml>
+  (raw URL returns HTTP 200).
+- GitHub Pages **Source** is set to **"GitHub Actions"** (`build_type: workflow`),
+  so the committed workflow — not the legacy branch bot — drives deployment.
 
-### Option 2 — command line (if you already use Git)
+## B. Owner step: confirm Pages is set to GitHub Actions
 
-From the folder that holds the committed app:
+Only if it is ever changed: in the repository, **Settings → Pages → Build and
+deployment → Source**, choose **"GitHub Actions"** and save. The committed
+workflow then publishes on every push to `main`. Open the **Actions** tab and
+confirm the **"Deploy to GitHub Pages"** run is green, then open the URL above.
+The site is served from the **repository root** (not `/docs`), matching the
+workflow and the delivery summary.
 
-```bash
-git remote set-url origin https://github.com/MatthewMBowyer/Invoice_app.git
-git push -u origin main        # normal push — never --force
-```
-
-You must be signed in to GitHub as an account that can write to
-`MatthewMBowyer/Invoice_app`. A **personal access token** used as the password
-must have **Contents: Read and write** for this repository. A token without that
-scope fails with `403 / Resource not accessible by personal access token`.
-
-## B. One-time: turn on GitHub Pages
-
-1. In the repository: **Settings → Pages**.
-2. Under **Build and deployment → Source**, choose **GitHub Actions**.
-3. Save. The included workflow (`.github/workflows/pages.yml`) then publishes on
-   every push to `main`.
-4. Wait for the **Actions** run to go green, then open:
-
-   **https://matthewmbowyer.github.io/Invoice_app/**
-
-   The site is served from the **repository root** (not `/docs`), matching the
-   workflow and the delivery summary.
-
-## C. One-time: let Google sign-in work for the live URL
+## C. Owner step: let Google sign-in work for the live URL
 
 1. In **Google Cloud Console → APIs & Services → Credentials**, open the OAuth
    **Client ID** used by the app.
 2. Under **Authorized JavaScript origins**, add `https://matthewmbowyer.github.io`.
+   If the authorization-code flow were used, add
+   `https://matthewmbowyer.github.io/Invoice_app/` as a redirect URI; the shipped
+   app uses the browser token flow, so the JavaScript origin is the one that
+   matters.
 3. Save. (If the OAuth consent screen is still in **Testing**, add each person's
    Google address as a test user, or publish the consent screen.)
 
-## D. Prove it end to end
+## D. Owner step: prove it end to end
 
-Run **`docs/OWNER_LIVE_VERIFICATION.md`** once the URL is live. It is the exact,
+Run **`docs/OWNER_LIVE_VERIFICATION.md`** against the live URL. It is the exact,
 four-part check: a stranger signs in, creates an invoice, confirms the file is in
-their own Drive, and confirms a second account sees none of it. Until you run it,
+their own Drive, and confirms a second account sees none of it. Until it is run,
 that item stays "unproven" — it is not something the build can prove.
 
-## What is already done (so you can trust the push)
+## What is already proven by the shipped checks
 
-- The whole app is committed to `main` as a single ordinary commit; no
-  force-push, no rewritten history.
-- `index.html` is at the repository root and every asset path is relative, so the
-  `/Invoice_app/` sub-path works.
-- The static checks, the cross-language parity harness, the headless
-  demonstrator, the PDF inspection and the click-driven UI harness all pass.
+- The static checks, the cross-language parity harness (176/0), the headless
+  demonstrator (50/0), the money/numbering suite (38/0), the PDF inspection and
+  the click-driven UI harness (37/0) all pass.
+- The live served `index.html` is byte-identical to the committed one, and all
+  referenced assets return HTTP 200 under the `/Invoice_app/` sub-path.
