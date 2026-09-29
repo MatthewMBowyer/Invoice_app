@@ -21,7 +21,7 @@ Drive as a Google Sheet.
 | Deliverable | Where | Notes |
 |---|---|---|
 | The app | `index.html`, `assets/`, `lib/` | ES modules, all asset paths **relative** |
-| Pages workflow | `.github/workflows/pages.yml` | publishes on push to `main` |
+| Pages workflow | `.github/workflows/pages.yml` | committed on `main` in this delivery tree; content also embedded in `docs/PUBLISH.md` §A. Not yet on the GitHub remote — the automation token lacks the GitHub `workflow` scope; one owner web-UI upload adds it (see §2 and `docs/PUBLISH.md` §A) |
 | Owner guides | `README.md`, `SETUP_GOOGLE.md`, `FOR_CHLOE.md` | plain language, no code for Chloe |
 | Schema | `docs/SPREADSHEET_SCHEMA.md` | final tabs and every column |
 | Checklists | `docs/MANUAL_TEST_CHECKLIST.md`, `docs/OWNER_LIVE_VERIFICATION.md` | manual flow + the live Google proof |
