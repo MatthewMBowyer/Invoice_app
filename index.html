@@ -19,8 +19,13 @@
        no server, no secret. Loaded before the app module so window.PDFLib is set. -->
   <script src="lib/pdf-lib.min.js"></script>
 
-  <!-- Google Identity Services (browser token flow; needs no client secret). -->
-  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <!-- Google Identity Services (browser token flow; needs no client secret).
+       Deliberately NOT async: deferred classic scripts and module scripts run in
+       document order, so the module below is guaranteed to see window.google.
+       With async this tag could execute AFTER the module, which then captured an
+       undefined window.google and failed with "Google Identity Services did not
+       load." whenever the GIS download was slower than the module. -->
+  <script src="https://accounts.google.com/gsi/client" defer></script>
 
   <script type="module" src="assets/js/app.js"></script>
 </body>

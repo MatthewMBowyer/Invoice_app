@@ -94,6 +94,8 @@ node tests/pdf_corpus.mjs                # renders the PDF population
 python3 tests/inspect_corpus.py <evidence_dir>/pdf_artifacts   # parses them with pypdf
 python3 tests/static_checks.py . <project_dir> <evidence_dir>  # no-secret, paths, brand
 python3 tests/browser_check.py . <evidence_dir>                # subdirectory + viewports
+python3 tests/gis_load_order_check.py .                        # GIS loads before the app
+python3 tests/gis_load_order_check.py . --negative-control     # ...and that check can fail
 ```
 
 `tests/parity_reference.py` is the Python side of the cross-language harness: it
