@@ -2,7 +2,7 @@
 // status) and an invoice detail with status actions, duplicate, soft cancel,
 // PDF download and the WhatsApp deep link.
 
-import { el, field, toast, confirmDialog, download, emptyState } from "../ui.js";
+import { el, field, toast, confirmDialog, download, emptyState, viewDocument, revealElement, headerOffset, canShareFile, shareFile } from "../ui.js";
 import * as I from "../invoicing.js";
 import * as W from "../whatsapp.js";
 import * as S from "../service.js";
@@ -80,6 +80,10 @@ export async function renderInvoices(main, { refresh }) {
   }
 
   async function showDetail(inv) {
+    // Probed once per detail view: Web Share level 2 decides whether the PDF can
+    // be attached at all, and the copy and the button must agree about that.
+    const canAttachPdf = canShareFile(new Uint8Array([1]), "probe.pdf", "application/pdf");
+
     const detail = el("div", { class: "detail-panel" });
     main.appendChild(detail);
     detail.appendChild(el("button", { class: "btn secondary small", text: "Back", onClick: () => detail.remove() }));
@@ -108,9 +112,25 @@ export async function renderInvoices(main, { refresh }) {
       try { const dup = await S.duplicateInvoice(store, inv.invoice_id); await store.reload(); toast(`Duplicated as #${dup.number_text}.`, "success"); refresh(); }
       catch (err) { toast(errorMessage(err), "error"); }
     } }));
-    actions.appendChild(el("button", { class: "btn secondary small", text: "Download PDF", onClick: async () => {
-      try { const bytes = await buildInvoicePdf(inv); download(I.invoiceFilename(inv), bytes, "application/pdf"); toast("PDF downloaded.", "success"); }
+
+    // One render, reused by view / download / share so all three show the same
+    // document and none of them can silently disagree with the others.
+    let cachedBytes = null;
+    async function pdfBytes() {
+      if (!cachedBytes) cachedBytes = await buildInvoicePdf(inv);
+      return cachedBytes;
+    }
+
+    actions.appendChild(el("button", { class: "btn primary small", text: "View invoice", onClick: async () => {
+      try { viewDocument(await pdfBytes(), I.invoiceFilename(inv)); }
       catch (err) { toast(errorMessage(err), "error"); }
+    } }));
+    actions.appendChild(el("button", { class: "btn secondary small", text: "Download PDF", onClick: async () => {
+      try {
+        const bytes = await pdfBytes();
+        download(I.invoiceFilename(inv), bytes, "application/pdf");
+        toast("PDF downloaded.", "success");
+      } catch (err) { toast(errorMessage(err), "error"); }
     } }));
     detail.appendChild(actions);
 
@@ -124,17 +144,37 @@ export async function renderInvoices(main, { refresh }) {
       wa.appendChild(el("p", { class: "help", text: share.problem }));
     } else {
       wa.appendChild(el("p", { class: "wa-url", text: share.url }));
-      wa.appendChild(el("div", { class: "detail-actions" }, [
-        el("a", { class: "btn primary small", href: share.url, target: "_blank", rel: "noopener", text: "Open WhatsApp" }),
-        el("button", { class: "btn secondary small", text: "Copy message", onClick: async () => {
-          try { await navigator.clipboard.writeText(share.message); toast("Message copied.", "success"); }
-          catch (err) { toast("Could not copy; select the text instead.", "error"); }
-        } }),
-      ]));
+      const waActions = el("div", { class: "detail-actions" });
+      waActions.appendChild(el("a", { class: "btn primary small", href: share.url, target: "_blank", rel: "noopener", text: "Open WhatsApp" }));
+      waActions.appendChild(el("button", { class: "btn secondary small", text: "Copy message", onClick: async () => {
+        try { await navigator.clipboard.writeText(share.message); toast("Message copied.", "success"); }
+        catch (err) { toast("Could not copy; select the text instead.", "error"); }
+      } }));
+
+      // Attaching the PDF is only possible through the OS share sheet: a wa.me
+      // link carries text and nothing else. On a phone (Web Share level 2) this
+      // hands WhatsApp the real file, so the parent receives the invoice itself.
+      if (canAttachPdf) {
+        waActions.appendChild(el("button", { class: "btn primary small", text: "Share PDF on WhatsApp", onClick: async () => {
+          try {
+            const bytes = await pdfBytes();
+            await shareFile(bytes, I.invoiceFilename(inv), "application/pdf", {
+              title: `Invoice ${inv.number_text}`, text: share.message,
+            });
+          } catch (err) {
+            // Dismissing the share sheet is a normal action, not a failure.
+            if (err && (err.name === "AbortError" || /abort|cancel/i.test(String(err.message || "")))) return;
+            toast("Could not open the share sheet. Use Download PDF, then attach it in WhatsApp.", "error");
+          }
+        } }));
+      }
+      wa.appendChild(waActions);
     }
-    wa.appendChild(el("p", { class: "help", text: "The app does not send anything and cannot confirm delivery. Attach the downloaded PDF inside WhatsApp." }));
+    wa.appendChild(el("p", { class: "help", text: canAttachPdf
+      ? "Tap Share PDF on WhatsApp, then choose WhatsApp to send the invoice and its PDF together."
+      : "The app does not send anything and cannot confirm delivery. Attach the downloaded PDF inside WhatsApp." }));
     detail.appendChild(wa);
-    detail.scrollIntoView({ behavior: "smooth" });
+    revealElement(detail, headerOffset() + 8);
   }
 
   draw();

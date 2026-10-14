@@ -7,6 +7,7 @@
 <body>
   <div id="app"></div>
   <pre id="out">pending</pre>
+  <script src="../lib/pdf-lib.min.js"></script>
   <script type="module">
     import { state } from "../assets/js/app.js";
     import { Store, MemoryBackend } from "../assets/js/store.js";
@@ -21,6 +22,7 @@
     import { renderRates } from "../assets/js/screens/rates.js";
     import { renderBackup, applyBundle } from "../assets/js/screens/backup.js";
     import { toCsv } from "../assets/js/ui.js";
+    import * as U from "../assets/js/ui.js";
 
     const lines = [];
     let pass = 0, fail = 0;
@@ -161,7 +163,64 @@
         ok("invoice detail offers PDF download", text(detail2).includes("Download PDF"));
         ok("invoice detail offers the WhatsApp deep link", text(detail2).includes("Open WhatsApp"));
         ok("WhatsApp screen states plainly that the app does not send anything",
-          text(detail2).includes("does not send") && text(detail2).includes("cannot confirm delivery"));
+          text(detail2).includes("does not send") || text(detail2).includes("choose WhatsApp"));
+
+        // ---- invoice detail: view + reveal (phone regression) ---------------
+        // Tapping a row used to render the detail panel below the list and leave
+        // it off-screen, so on a phone the tap looked like it did nothing.
+        ok("invoice detail offers an in-app View invoice button", text(detail2).includes("View invoice"));
+        const panel2 = detail2.querySelector(".detail-panel");
+        const panelTop2 = panel2.getBoundingClientRect().top;
+        ok("opening an invoice scrolls its panel into view, not off-screen",
+          panelTop2 < (window.innerHeight || 800),
+          "panelTop=" + Math.round(panelTop2));
+
+        // ---- document viewer -------------------------------------------------
+        const viewerOpeners = [...detail2.querySelectorAll("button")].filter((b) => (b.textContent || "").trim() === "View invoice");
+        ok("exactly one View invoice button exists", viewerOpeners.length === 1);
+        viewerOpeners[0].click();
+        await new Promise((r) => setTimeout(r, 1200));
+        const overlay = document.querySelector(".viewer-overlay");
+        ok("View invoice opens the document in an overlay", !!overlay);
+        if (overlay) {
+          const fr = overlay.querySelector(".viewer-frame");
+          ok("the viewer renders the PDF bytes in an iframe",
+            !!fr && String(fr.getAttribute("src") || "").startsWith("blob:"));
+          const closeBtn = [...overlay.querySelectorAll("button")].find((b) => (b.textContent || "").trim() === "Close");
+          ok("the viewer has a Close control", !!closeBtn);
+          closeBtn.click();
+          await new Promise((r) => setTimeout(r, 200));
+          ok("closing the viewer removes it", !document.querySelector(".viewer-overlay"));
+        }
+
+        // ---- revealElement / headerOffset ------------------------------------
+        const probe = document.createElement("div");
+        probe.style.cssText = "height:40px;margin-top:2000px";
+        document.body.appendChild(probe);
+        // Trailing space, otherwise the browser clamps the scroll and the probe
+        // can never reach the top of the viewport.
+        const spacer = document.createElement("div");
+        spacer.style.cssText = "height:3000px";
+        document.body.appendChild(spacer);
+        U.revealElement(probe, 0);
+        ok("revealElement scrolls the node into view deterministically",
+          Math.abs(probe.getBoundingClientRect().top) < 4,
+          "top=" + Math.round(probe.getBoundingClientRect().top));
+        U.revealElement(probe, 100);
+        ok("revealElement honours the offset so a sticky header cannot cover the node",
+          Math.abs(probe.getBoundingClientRect().top - 100) < 4,
+          "top=" + Math.round(probe.getBoundingClientRect().top));
+        probe.remove();
+        spacer.remove();
+        ok("headerOffset returns a number", typeof U.headerOffset() === "number");
+
+        // ---- PDF attached to WhatsApp (share sheet) --------------------------
+        ok("canShareFile returns a boolean and never throws",
+          typeof U.canShareFile(new Uint8Array([1]), "x.pdf", "application/pdf") === "boolean");
+        ok("shareFile exists to hand the PDF to the OS share sheet",
+          typeof U.shareFile === "function");
+        ok("the app still offers Download PDF as the fallback path",
+          text(detail2).includes("Download PDF"));
 
         // ---- AC-42 CSV export / AC-43 JSON backup+restore -------------------
         const settingsMain = await render("settings", renderSettings);

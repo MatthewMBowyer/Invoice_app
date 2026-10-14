@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<!-- TEST-ONLY phone-width driver. Not part of the shipped app. Headless
+     Chromium clamps its window to ~500px, so a --window-size=390 does NOT lay
+     out at 390px. This frames the real invoice screen in a 390x844 iframe (an
+     iPhone-class viewport) and drives it: tap a row, then use the detail panel.
+     It exists because tapping a row used to open the detail panel BELOW the
+     list, off-screen, so on a phone the tap looked like it did nothing. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="../assets/css/app.css" />
+</head>
+<body>
+  <div id="app"></div>
+  <pre id="out">pending</pre>
+  <script src="../lib/pdf-lib.min.js"></script>
+  <script type="module">
+    import { state } from "../assets/js/app.js";
+    import { Store, MemoryBackend } from "../assets/js/store.js";
+    import * as S from "../assets/js/service.js";
+    import * as I from "../assets/js/invoicing.js";
+    import { renderInvoices } from "../assets/js/screens/invoices.js";
+    import { renderParents } from "../assets/js/screens/parents.js";
+    import { el } from "../assets/js/ui.js";
+
+    const lines = [];
+    let pass = 0, fail = 0;
+    const ok = (name, cond, detail = "") => {
+      if (cond) { pass++; lines.push("ok   " + name); }
+      else { fail++; lines.push("FAIL " + name + " " + detail); }
+    };
+
+    // The app shell exactly as app.js builds it: sticky header, main, fixed nav.
+    function buildShell() {
+      const root = document.getElementById("app");
+      root.replaceChildren();
+      root.appendChild(el("header", { class: "app-header" }, [
+        el("div", { class: "header-inner" }, [
+          el("div", { class: "brand-text" }, [el("strong", { text: "Chloe's Travelling" }), el("span", { text: "Tutors" })]),
+        ]),
+      ]));
+      const main = el("main", { class: "app-main" });
+      root.appendChild(main);
+      const nav = el("nav", { class: "bottom-nav", "aria-label": "Main navigation" });
+      for (const label of ["Create", "Parents", "Invoices", "Rates", "Settings"]) {
+        nav.appendChild(el("button", { class: "nav-item" }, [
+          el("span", { class: "nav-icon", text: label.charAt(0) }),
+          el("span", { class: "nav-label", text: label }),
+        ]));
+      }
+      root.appendChild(nav);
+      return main;
+    }
+
+    function inViewport(node) {
+      const r = node.getBoundingClientRect();
+      return r.top >= 0 && r.bottom <= window.innerHeight && r.height > 0;
+    }
+
+    (async () => {
+      try {
+        const store = new Store(new MemoryBackend());
+        await store.open(); await store.bootstrapIfEmpty();
+        state.store = store; state.user = { name: "T", email: "t@e.com" }; state.ready = true;
+
+        ok("the frame really is a phone viewport", window.innerWidth === 390, "width=" + window.innerWidth);
+
+        // The test drives the page by setting scrollTop directly, and app.css sets
+        // `html { scroll-behavior: smooth }`, so those jumps would otherwise be
+        // animated and every measurement below would be taken mid-flight.
+        document.documentElement.style.scrollBehavior = "auto";
+
+        await S.saveParent(store, { name: "Probe", surname: "Parent", whatsapp: "0821234567" });
+        await store.reload();
+        const kid = await S.addLearner(store, { parentId: 1, name: "Kid", surname: "One", grade: "Grade 4", schoolLevel: "primary", defaultRateCents: 24000 });
+        await store.reload();
+        // Enough invoices that the list is taller than one phone screen.
+        for (let n = 0; n < 10; n += 1) {
+          await S.createInvoice(store, { parentId: 1, learnerId: kid.learner_id, lines: [{ service: "primary", mode: "hourly", rate: "240", hours: "4" }] });
+        }
+        await store.reload();
+
+        const main = buildShell();
+        await renderInvoices(main, { navigate() {}, refresh() {} });
+        const scroller = document.scrollingElement;
+        ok("the invoice list is longer than one phone screen",
+          scroller.scrollHeight > window.innerHeight, "scrollHeight=" + scroller.scrollHeight);
+
+        const rows = main.querySelectorAll(".invoice-row");
+        ok("invoice rows are rendered", rows.length === 10, "rows=" + rows.length);
+
+        // Tap a row that is ON SCREEN, which is what a phone user does.
+        scroller.scrollTop = 0;
+        await new Promise((r) => setTimeout(r, 200));
+        const target = rows[0];
+        const tr = target.getBoundingClientRect();
+        const hit = document.elementFromPoint(tr.left + tr.width / 2, tr.top + tr.height / 2);
+        ok("an invoice row is the actual tap target", !!(hit && (hit === target || target.contains(hit))));
+
+        target.click();
+        await new Promise((r) => setTimeout(r, 900));
+
+        const panel = main.querySelector(".detail-panel");
+        ok("tapping a row opens the detail panel", !!panel);
+
+        // The regression: the panel must be brought into view, not left below.
+        const heading = panel.querySelector("h2");
+        ok("the detail panel heading is on screen after tapping a row",
+          inViewport(heading),
+          "headingTop=" + Math.round(heading.getBoundingClientRect().top) + " viewport=" + window.innerHeight);
+        ok("the panel is not hidden under the sticky header",
+          heading.getBoundingClientRect().top >= document.querySelector(".app-header").getBoundingClientRect().bottom - 2,
+          "headingTop=" + Math.round(heading.getBoundingClientRect().top));
+
+        // Every control on the panel must be reachable: scroll it to the middle
+        // of the screen, as a user would, then confirm the tap would land on it
+        // rather than on the fixed bottom nav that overlays the page.
+        const navRect = document.querySelector(".bottom-nav").getBoundingClientRect();
+        for (const label of ["View invoice", "Download PDF", "Open WhatsApp", "Copy message"]) {
+          const btn = [...panel.querySelectorAll("button,a")].find((b) => (b.textContent || "").trim() === label);
+          ok(`the panel offers "${label}"`, !!btn);
+          if (!btn) continue;
+          scroller.scrollTop = btn.getBoundingClientRect().top + scroller.scrollTop - window.innerHeight / 2;
+          await new Promise((r) => setTimeout(r, 120));
+          const br = btn.getBoundingClientRect();
+          const at = document.elementFromPoint(br.left + br.width / 2, br.top + br.height / 2);
+          ok(`"${label}" can be tapped without hitting the bottom nav`,
+            !!(at && (at === btn || btn.contains(at))),
+            "btnTop=" + Math.round(br.top) + " navTop=" + Math.round(navRect.top)
+              + " maxScroll=" + Math.round(scroller.scrollHeight - window.innerHeight)
+              + " atMax=" + Math.round(scroller.scrollTop));
+        }
+
+        // The page must end with enough room that the LAST control can clear the
+        // fixed nav. Without this the bottom of the panel is unreachable.
+        scroller.scrollTop = scroller.scrollHeight;
+        await new Promise((r) => setTimeout(r, 120));
+        const panelRect = panel.getBoundingClientRect();
+        ok("the panel's last control clears the fixed bottom nav at maximum scroll",
+          panelRect.bottom <= navRect.top,
+          "panelBottom=" + Math.round(panelRect.bottom) + " navTop=" + Math.round(navRect.top));
+
+        // View invoice must actually show the document, in an overlay.
+        const viewBtn = [...panel.querySelectorAll("button")].find((b) => (b.textContent || "").trim() === "View invoice");
+        viewBtn.click();
+        await new Promise((r) => setTimeout(r, 1500));
+        const overlay = document.querySelector(".viewer-overlay");
+        ok("View invoice opens a document overlay at phone width", !!overlay);
+        if (overlay) {
+          const fr = overlay.querySelector(".viewer-frame");
+          ok("the overlay fills the phone viewport",
+            inViewport(overlay),
+            "overlayTop=" + Math.round(overlay.getBoundingClientRect().top));
+          ok("the overlay renders the PDF from a blob URL",
+            !!fr && String(fr.getAttribute("src") || "").startsWith("blob:"));
+          const close = [...overlay.querySelectorAll("button")].find((b) => (b.textContent || "").trim() === "Close");
+          close.click();
+          await new Promise((r) => setTimeout(r, 200));
+          ok("the overlay closes and unblocks the page", !document.querySelector(".viewer-overlay"));
+        }
+
+        // The parent detail panel uses the same reveal path.
+        const main2 = buildShell();
+        await renderParents(main2, { navigate() {}, refresh() {} });
+        const openBtn = [...main2.querySelectorAll("button")].find((b) => (b.textContent || "").trim() === "Open");
+        ok("the parents screen offers an Open button", !!openBtn);
+        openBtn.click();
+        await new Promise((r) => setTimeout(r, 600));
+        const parentPanel = main2.querySelector(".detail-panel");
+        ok("opening a parent reveals its panel on screen",
+          !!parentPanel && inViewport(parentPanel.querySelector("h2")),
+          parentPanel ? "headingTop=" + Math.round(parentPanel.querySelector("h2").getBoundingClientRect().top) : "no panel");
+      } catch (e) {
+        fail++;
+        lines.push("FAIL harness threw: " + String((e && e.stack) || e));
+      }
+      lines.push("");
+      lines.push(`phone checks: ${pass} passed, ${fail} failed`);
+      lines.push(fail === 0 ? "PHONE_UI: PASS" : "PHONE_UI: FAIL");
+      document.getElementById("out").textContent = lines.join("\n");
+    })();
+  </script>
+</body>
+</html>

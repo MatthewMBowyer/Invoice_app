@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<!-- TEST-ONLY wrapper for tests/phone_ui.html. Headless Chromium enforces a
+     ~500px minimum window, so a --window-size=390 still lays out at 500px. This
+     frames the real driver in a 390x844 same-origin iframe, which makes the
+     inner document's layout viewport genuinely phone-sized, and relays its
+     report. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>phone ui probe</title>
+  <style>iframe { border: 0; display: block; }</style>
+</head>
+<body>
+  <pre id="out">pending</pre>
+  <div id="host"></div>
+  <script>
+    const frame = document.createElement("iframe");
+    frame.width = "390";
+    frame.height = "844";
+    frame.src = "phone_ui.html";
+    document.getElementById("host").appendChild(frame);
+
+    const deadline = Date.now() + 60000;
+    (function poll() {
+      let payload = null;
+      try {
+        const pre = frame.contentDocument.getElementById("out");
+        const txt = pre ? pre.textContent.trim() : "";
+        if (txt && txt !== "pending") payload = txt;
+      } catch (e) {
+        payload = "PHONE_UI: FAIL\nharness error: " + e;
+      }
+      if (payload || Date.now() > deadline) {
+        document.getElementById("out").textContent = payload || "PHONE_UI: FAIL\ntimed out";
+        return;
+      }
+      setTimeout(poll, 100);
+    })();
+  </script>
+</body>
+</html>

@@ -3,7 +3,7 @@
 // edit and remove, and a parent detail view. A parent with financial history
 // cannot be deleted.
 
-import { el, field, toast, confirmDialog, emptyState } from "../ui.js";
+import { el, field, toast, confirmDialog, emptyState, revealElement, headerOffset } from "../ui.js";
 import * as S from "../service.js";
 import { state, navigate, errorMessage } from "../app.js";
 
@@ -96,7 +96,7 @@ export async function renderParents(main, { refresh }) {
     panel.appendChild(el("h3", { text: "Invoices" }));
     if (!invs.length) panel.appendChild(el("p", { class: "help", text: "No invoices yet." }));
     for (const i of invs) panel.appendChild(el("p", { text: `#${i.number_text} \u2022 ${i.status}` }));
-    panel.scrollIntoView({ behavior: "smooth" });
+    revealElement(panel, headerOffset() + 8);
   }
 
   function editParent(p) {

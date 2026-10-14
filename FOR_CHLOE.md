@@ -93,8 +93,16 @@ Open **Invoices**, tap the invoice, then tap **Open WhatsApp**. Your message is
 already written and the parent's number is already in it. Send it there.
 
 The app cannot send it for you and cannot tell whether it arrived — WhatsApp
-keeps that to itself. You will also want to attach the PDF: tap **Download PDF**
-first, then in WhatsApp use the paperclip to attach the file you just saved.
+keeps that to itself.
+
+To send the invoice itself as well, tap **Share PDF on WhatsApp**. On a phone
+this opens the normal phone share sheet with the invoice PDF already attached;
+choose WhatsApp and send. The app cannot put a file into WhatsApp for you, so if
+that button is not there, tap **Download PDF** and then use the paperclip inside
+WhatsApp to attach the file you just saved.
+
+You can also tap **View invoice** to see exactly what the parent will receive,
+without saving or sending anything.
 
 ---
 

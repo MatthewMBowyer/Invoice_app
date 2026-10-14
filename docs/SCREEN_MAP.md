@@ -19,7 +19,7 @@ the URL hash.
 | 6 | Add / edit learner | `#/parents` → Add learner / Edit (dialog) | name, surname, grade (free text), school level (Primary/High School), default rate | Add learner (`/parents/{id}/learners/new`) |
 | 7 | **New Invoice** | `#/create` | three steps: (1) Who is it for? (2) Rate and hours (3) Dates | New Invoice (`/invoices/new`) |
 | 8 | Invoice history | `#/invoices` | five filters (parent, learner, number, month, status) + list | Invoice history (`/invoices`) |
-| 9 | Invoice detail | `#/invoices` → tap a row (inline panel) | status actions (Draft/Sent/Paid/Cancelled), Duplicate, soft Cancel (confirmed), Download PDF, WhatsApp block | Invoice detail (`/invoices/{id}`) |
+| 9 | Invoice detail | `#/invoices` → tap a row (inline panel) | status actions (Draft/Sent/Paid/Cancelled), Duplicate, soft Cancel (confirmed), View invoice, Download PDF, WhatsApp block | Invoice detail (`/invoices/{id}`) |
 | 10 | Rates | `#/rates` | editable rate types (label + hourly price + active), Add rate type | Rates (`/rates`) |
 | 11 | Settings | `#/settings` | Business, Banking, Invoicing, Appearance, WhatsApp, plus Export CSV | Settings (`/settings`) |
 | 12 | Backup / restore | `#/backup` | Export JSON backup, Restore from a JSON file | Backup/restore (`/backup`) |

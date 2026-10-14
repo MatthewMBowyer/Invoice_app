@@ -65,6 +65,7 @@ Legend: **[auto]** = also covered by an automated check in `tests/`;
 
 | # | Step | Expected result |
 |---|------|-----------------|
+| 5.0 | Open an invoice and tap **View invoice**. | The PDF opens in a full-screen viewer over the app, on a phone as well as a desktop. It can be closed and the app is left where it was. **[auto]** |
 | 5.1 | Open an invoice and tap **Download PDF**. | A PDF downloads named like `Chloes_Travelling_Tutors_Invoice_<n>_<Parent>.pdf`. **[auto]** |
 | 5.2 | Open the PDF and read it. | It has **INVOICE**, the business block, a **BILL TO** block, the invoice number, issue date and due date, the line items (with hours, or a flat amount), the subtotal and the **total in ZAR**, the **banking details**, the **payment reference** and the footer. **[auto]** |
 | 5.3 | Change a rate in **Rates**, then download the *same old* invoice again. | The old invoice's PDF is **unchanged** — it uses the values captured when it was made, not today's settings. **[auto]** |
@@ -85,6 +86,8 @@ Legend: **[auto]** = also covered by an automated check in `tests/`;
 | 7.2 | Tap **Open WhatsApp**. | WhatsApp opens (or the web version) with the chat and the message pre-filled. |
 | 7.3 | Read the note under the share block. | It says plainly that the app **does not send anything** and **cannot confirm delivery**. **[auto]** |
 | 7.4 | Tap **Copy message**. | The message is copied to the clipboard. |
+| 7.5 | On a phone, tap **Share PDF on WhatsApp**. | The phone share sheet opens with the invoice PDF attached; choosing WhatsApp starts a chat with the file ready to send. On a desktop, where the share sheet cannot take files, the button is absent and the note points at **Download PDF** instead. |
+| 7.6 | Read the note under the share block on a phone. | It tells you to tap **Share PDF on WhatsApp**, and does not claim the app sends anything by itself. **[auto]** |
 
 ## 8. Export, backup and restore
 

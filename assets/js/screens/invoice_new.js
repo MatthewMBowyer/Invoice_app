@@ -6,7 +6,7 @@
 //   3. Dates           (auto-assigned number, invoice date, due date; editable)
 // "Remember this rate for this parent" saves the rate for next time.
 
-import { el, field, toast, download } from "../ui.js";
+import { el, field, toast, viewDocument } from "../ui.js";
 import * as I from "../invoicing.js";
 import * as M from "../money.js";
 import * as S from "../service.js";
@@ -322,7 +322,10 @@ export async function renderInvoiceNew(main) {
       if (alsoPdf) {
         const fresh = store.invoices.find((i) => String(i.invoice_id) === String(invoice.invoice_id));
         const bytes = await buildInvoicePdf(fresh);
-        download(I.invoiceFilename(fresh), bytes, "application/pdf");
+        // The button says "Preview", so it must actually show the document. A
+        // bare download looks like nothing happened on a phone, where the
+        // download attribute is often ignored.
+        viewDocument(bytes, I.invoiceFilename(fresh));
       }
       navigate("invoices");
     } catch (err) {
