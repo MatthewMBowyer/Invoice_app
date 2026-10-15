@@ -33,6 +33,38 @@ const TOKEN_LIFETIME_MS = 55 * 60 * 1000;
 // Private per-instance state. The access token is only ever read via getToken().
 const STATE = new WeakMap();
 
+// Remembers the address that last signed in, so Google can skip the account
+// chooser. This is an email address the user typed into Google's own flow, not a
+// credential, and it grants no access on its own - it is only a hint.
+const LAST_EMAIL_KEY = "ctt_invoice_last_email";
+
+function hintStorage() {
+  try {
+    return typeof localStorage !== "undefined" ? localStorage : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+export function rememberSignedInEmail(email) {
+  const store = hintStorage();
+  if (!store) return;
+  try {
+    if (email) store.setItem(LAST_EMAIL_KEY, String(email));
+    else store.removeItem(LAST_EMAIL_KEY);
+  } catch (err) { /* private mode: the hint is optional */ }
+}
+
+export function rememberedEmail() {
+  const store = hintStorage();
+  if (!store) return "";
+  try {
+    return store.getItem(LAST_EMAIL_KEY) || "";
+  } catch (err) {
+    return "";
+  }
+}
+
 export class Auth {
   constructor({ clientId = CLIENT_ID, scopes = SCOPES, gis = null } = {}) {
     STATE.set(this, {
@@ -127,6 +159,8 @@ export class Auth {
       if (res.ok) {
         const data = await res.json();
         s.profile = { name: data.name || data.email || "Signed in", email: data.email || "" };
+        // Remembered only as a sign-in hint for next time.
+        if (s.profile.email) rememberSignedInEmail(s.profile.email);
       }
     } catch (err) {
       // A profile fetch failure is not fatal: the token still works for Drive.
@@ -141,8 +175,48 @@ export class Auth {
       if (!s.tokenClient) this.init();
       s.resolvePending = resolve;
       s.rejectPending = reject;
-      s.tokenClient.requestAccessToken({ prompt: "consent" });
+      // `prompt` is deliberately omitted rather than forced to "consent": the
+      // owner has already granted these scopes, so Google issues the token
+      // without re-showing the approval screen, but may still interact if it
+      // genuinely needs to. Passing "" here would mean "never interact", which
+      // would break the first sign-in on a new device. The remembered address
+      // additionally skips the account chooser for the usual single-account case.
+      const options = {};
+      const hint = rememberedEmail();
+      if (hint) options.hint = hint;
+      s.tokenClient.requestAccessToken(options);
     });
+  }
+
+  /**
+   * Try to restore a session with NO user interaction at all.
+   *
+   * GIS can re-issue a token silently when the browser still holds a Google
+   * session and the user has already consented. Calling this on boot is what
+   * makes returning to the app land straight on the dashboard instead of the
+   * sign-in card. Resolves false (never throws) when a tap is genuinely needed.
+   */
+  async trySilentSignIn() {
+    const s = STATE.get(this);
+    if (this.hasValidToken()) return true;
+    try {
+      if (!s.tokenClient) this.init();
+    } catch (err) {
+      return false;
+    }
+    try {
+      await new Promise((resolve, reject) => {
+        s.resolvePending = resolve;
+        s.rejectPending = reject;
+        s.tokenClient.requestAccessToken({ prompt: "" });
+      });
+      return this.hasValidToken();
+    } catch (err) {
+      return false;
+    } finally {
+      s.resolvePending = null;
+      s.rejectPending = null;
+    }
   }
 
   /**
@@ -175,6 +249,10 @@ export class Auth {
     s.token = null;
     s.expiresAt = 0;
     s.profile = null;
+    // A deliberate sign-out must not be silently undone by the next boot, so the
+    // remembered account hint goes with it. (Chrome's own Google session is
+    // untouched - that is the browser's, not this app's.)
+    rememberSignedInEmail("");
     if (token && this.gis && this.gis.accounts && this.gis.accounts.oauth2) {
       this.gis.accounts.oauth2.revoke(token, () => {});
     }

@@ -53,6 +53,18 @@ export function snapshotFields(settings, parent, learner) {
   };
 }
 
+/** Which banking keys are printed in the PDF's payment block. */
+export const BANKING_KEYS = [
+  "account_holder", "account_type", "bank_name",
+  "branch_code", "account_number", "swift_bic",
+];
+
+/** True when the owner has filled in at least one banking field. */
+export function hasBankingDetails(settings) {
+  const s = settings || {};
+  return BANKING_KEYS.some((k) => String(s[k] ?? "").trim() !== "");
+}
+
 export function validateInvoice(store, { parentId, lines, manualNumber, manualPrefix }) {
   const errors = [];
   const warnings = [];
@@ -62,6 +74,14 @@ export function validateInvoice(store, { parentId, lines, manualNumber, manualPr
     warnings.push(`${parent.name} is marked inactive - the invoice will still be generated.`);
   }
   if (!lines || !lines.length) errors.push("Add at least one line item before generating an invoice.");
+
+  // No banking details means the invoice goes out with blank ruled lines and no
+  // way for the parent to pay it. That is a warning, not an error: the owner may
+  // genuinely intend to collect by another route.
+  if (!hasBankingDetails(store.settings)) {
+    warnings.push("Your banking details are still blank, so the invoice will print empty "
+      + "payment lines. Add them under Settings - Banking if you want them shown.");
+  }
 
   let total = 0;
   (lines || []).forEach((line, idx) => {
@@ -154,7 +174,7 @@ export async function createInvoice(store, {
   const termsDays = asInt(nextSettings.due_date_period_days, 7);
   const due = dueDate || M.addDays(date, termsDays);
 
-  const prepared = INV.normaliseLines(lines);
+  const prepared = INV.normaliseLines(lines, store.rates);
   const total = INV.invoiceTotalCents(prepared);
   const invoiceId = nextId(store.invoices, "invoice_id");
 
@@ -337,6 +357,42 @@ export async function removeLearner(store, learnerId) {
   rows.splice(idx, 1);
   await commitTabs(store, { LEARNERS: rows }, "remove the learner");
   store.learners = rows;
+}
+
+/**
+ * Copy the owner's CURRENT banking settings onto an already-issued invoice.
+ *
+ * The PDF prints the banking values stored on the invoice, so an invoice
+ * generated before the banking details were entered keeps its blank lines
+ * forever. This is the explicit, owner-initiated repair: it changes ONLY the
+ * six banking snapshot fields, never a total, date, number or line item, and it
+ * is offered in the UI only when those fields are actually blank.
+ */
+export async function applyBankingToInvoice(store, invoiceId) {
+  const rows = store.invoices.slice();
+  const idx = rows.findIndex((i) => asInt(i.invoice_id) === asInt(invoiceId));
+  if (idx === -1) throw new ValidationError(["That invoice no longer exists."]);
+  if (!hasBankingDetails(store.settings)) {
+    throw new ValidationError([
+      "Your banking details are still blank. Fill them in under Settings - Banking first.",
+    ]);
+  }
+  const patch = {};
+  for (const [key, snapshotKey] of [
+    ["account_holder", "snap_bank_account_holder"],
+    ["account_type", "snap_bank_account_type"],
+    ["bank_name", "snap_bank_name"],
+    ["branch_code", "snap_bank_branch_code"],
+    ["account_number", "snap_bank_account_number"],
+    ["swift_bic", "snap_bank_swift"],
+  ]) {
+    patch[snapshotKey] = store.settings[key] ?? "";
+  }
+  patch.updated_at = nowIso();
+  rows[idx] = Object.assign({}, rows[idx], patch);
+  await commitTabs(store, { INVOICES: rows }, "add your banking details to the invoice");
+  store.invoices = rows;
+  return rows[idx];
 }
 
 /** Save a rate type (used by "+ Add a new rate" on the invoice screen). */

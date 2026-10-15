@@ -10,7 +10,8 @@
 // historical invoice cannot change when any of that data changes later.
 
 import { formatMoney, formatDateDisplay, formatHours } from "./money.js";
-import { paymentReference } from "./invoicing.js";
+import { paymentReference, serviceLabel } from "./invoicing.js";
+import { cleanCell } from "./store.js";
 
 export const PAGE_WIDTH = 595.28;
 export const PAGE_HEIGHT = 841.89;
@@ -42,8 +43,14 @@ function money(invoice, cents) {
   return formatMoney(cents, invoice.currency || "ZAR", symbol);
 }
 
-/** Build the A4 PDF bytes for a stored invoice. Returns a Uint8Array. */
-export async function buildInvoicePdf(invoice, { PDFLib } = {}) {
+/** Build the A4 PDF bytes for a stored invoice. Returns a Uint8Array.
+ *
+ * ``rates`` is optional: the owner's current rate types, used ONLY to turn a
+ * bare service key ("high") into the label the owner gave it ("High School")
+ * for invoices whose line descriptions predate that being stored. It never
+ * changes a stored total, so snapshot immutability is untouched.
+ */
+export async function buildInvoicePdf(invoice, { PDFLib, rates } = {}) {
   const lib = PDFLib || (typeof window !== "undefined" ? window.PDFLib : null);
   if (!lib || !lib.PDFDocument) {
     throw new Error("The PDF library (pdf-lib) is not available.");
@@ -66,7 +73,7 @@ export async function buildInvoicePdf(invoice, { PDFLib } = {}) {
   const accentCol = rgb(...accent);
 
   const text = (str, x, y, { size = 10, f = font, color = ink } = {}) =>
-    page.drawText(String(str), { x, y, size, font: f, color });
+    page.drawText(String(cleanCell(str)), { x, y, size, font: f, color });
 
   const textRight = (str, xRight, y, opts = {}) => {
     const size = opts.size || 10;
@@ -97,9 +104,18 @@ export async function buildInvoicePdf(invoice, { PDFLib } = {}) {
   text("BILL TO", MARGIN, y, { size: 9, f: bold, color: grey });
   text(invoice.snap_parent_name || "", MARGIN, y - 14, { size: 12, f: bold });
   let py = y - 28;
-  if (invoice.snap_parent_whatsapp) { text(invoice.snap_parent_whatsapp, MARGIN, py, { size: 9 }); py -= 11; }
-  if (invoice.snap_parent_email) { text(invoice.snap_parent_email, MARGIN, py, { size: 9 }); py -= 11; }
-  if (invoice.snap_learner_name) { text(invoice.snap_learner_name, MARGIN, py, { size: 9, color: grey }); }
+  // Blank contact rows are skipped rather than drawn: a stored value that was
+  // neutralised to empty must not leave a stray blank line where a phone number
+  // or an error literal used to be.
+  for (const [value, opts] of [
+    [invoice.snap_parent_whatsapp, { size: 9 }],
+    [invoice.snap_parent_email, { size: 9 }],
+    [invoice.snap_learner_name, { size: 9, color: grey }],
+  ]) {
+    if (!cleanCell(value)) continue;
+    text(value, MARGIN, py, opts);
+    py -= 11;
+  }
 
   const metaX = right - 150;
   const meta = [
@@ -126,15 +142,21 @@ export async function buildInvoicePdf(invoice, { PDFLib } = {}) {
   y -= 16;
 
   const lines = invoice.line_items || [];
+  const rateRows = rates || [];
   for (const line of lines) {
     const isFlat = String(line.is_flat) === "1" || line.is_flat === true;
     const qty = isFlat ? "flat" : formatHours(Number(line.hours_milli));
     const rateCents = Number(line.rate_cents);
-    let desc = line.description;
+    let desc = cleanCell(line.description);
     if (!desc) {
-      const label = String(line.service || "Tuition").replace(/_/g, " ")
-        .replace(/\b\w/g, (c) => c.toUpperCase());
-      desc = `${label} Tuition`;
+      // The stored key is "high", not a word a parent should read. Use the
+      // owner's own label for that rate type ("High School") when it is
+      // available, and only then fall back to title-casing the key.
+      const label = serviceLabel(
+        rateRows.find((r) => r.key === line.service),
+        line.service,
+      );
+      desc = label;
     }
     text(desc, cols.item, y, { size: 10 });
     textRight(money(invoice, rateCents), cols.price + 60, y, { size: 10 });

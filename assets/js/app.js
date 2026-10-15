@@ -1,7 +1,7 @@
 // App shell: brand header, the sign-in gate, the router and the bottom-anchored
 // navigation. Everything runs in the browser; there is no server.
 
-import { auth, AuthExpiredError } from "./auth.js";
+import { auth, AuthExpiredError, rememberedEmail } from "./auth.js";
 import { Store, GoogleDriveBackend, StoreError } from "./store.js";
 import { el, clear, toast } from "./ui.js";
 import { renderDashboard } from "./screens/dashboard.js";
@@ -169,11 +169,27 @@ async function loadData() {
 function boot() {
   const root = document.getElementById("app");
   auth.onStateChange(() => { });
-  if (!auth.isSignedIn()) {
-    gateView(root);
+  if (auth.isSignedIn()) {
+    loadData().catch((err) => { toast(errorMessage(err), "error"); gateView(root); });
     return;
   }
-  loadData().catch((err) => { toast(errorMessage(err), "error"); gateView(root); });
+  // No token in memory yet, but the browser may still hold a Google session and
+  // an earlier consent. Asking GIS silently first is what turns "sign in again
+  // every visit" into "it just opens". While that is in flight the user sees the
+  // ordinary loading line rather than the sign-in card, so an account that can
+  // sign in silently never flashes a login screen at all.
+  const remembered = rememberedEmail();
+  root.appendChild(header(root));
+  root.appendChild(el("main", { class: "app-main" }, [
+    el("div", { class: "loading", text: remembered ? `Signing in as ${remembered}\u2026` : "Loading\u2026" }),
+  ]));
+  auth.trySilentSignIn().then((ok) => {
+    if (ok) {
+      loadData().catch((err) => { toast(errorMessage(err), "error"); gateView(root); });
+      return;
+    }
+    gateView(root);
+  });
 }
 
 window.addEventListener("hashchange", () => {

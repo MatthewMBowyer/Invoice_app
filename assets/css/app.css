@@ -236,6 +236,10 @@ dialog.app-dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
 .toast-success { background: var(--ctt-blue); }
 .toast-error { background: var(--ctt-danger); }
 .error-box { background: rgba(179, 38, 30, 0.08); border: 1px solid var(--ctt-danger); color: var(--ctt-danger); padding: var(--space-4); border-radius: var(--radius); font-weight: 700; }
+ul.error-box { margin: 0; padding-left: var(--space-5); }
+ul.error-box li { margin: var(--space-1) 0; }
+/* Marks the exact line row a validation message refers to. */
+.line-row.field-error { border-color: var(--ctt-danger); box-shadow: 0 0 0 2px rgba(179, 38, 30, 0.18); }
 
 /* ---- document viewer ------------------------------------------------- */
 body.viewer-open { overflow: hidden; }

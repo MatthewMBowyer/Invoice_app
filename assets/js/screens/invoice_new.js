@@ -1,10 +1,15 @@
-// New Invoice — one short screen in three steps, exactly as specified:
+// New Invoice — one short screen in three steps:
 //   1. Who is it for?  (type-ahead over saved parents; new parent reveals a
 //      mobile-number box; the child picker is hidden for a new parent)
 //   2. Rate and hours  (rate select with "+ Add a new rate"; hours or a flat
-//      total; add/remove rows named after their own row)
+//      total; a description; add/remove rows)
 //   3. Dates           (auto-assigned number, invoice date, due date; editable)
 // "Remember this rate for this parent" saves the rate for next time.
+//
+// The typed work is held in `draft` and mirrored to localStorage on every
+// change, so moving between steps (or reloading) never discards it, and a
+// validation failure is reported on the field that caused it rather than as a
+// bare "Line 1: enter a rate" the owner cannot act on.
 
 import { el, field, toast, viewDocument } from "../ui.js";
 import * as I from "../invoicing.js";
@@ -13,25 +18,72 @@ import * as S from "../service.js";
 import { buildInvoicePdf } from "../pdf.js";
 import { state, navigate, errorMessage } from "../app.js";
 
+const DRAFT_KEY = "ctt_invoice_draft";
+
 function rateKey(raw) {
   return String(raw || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+}
+
+function loadDraft() {
+  try {
+    const raw = typeof localStorage !== "undefined" ? localStorage.getItem(DRAFT_KEY) : null;
+    return raw ? JSON.parse(raw) : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function saveDraft(draft) {
+  try {
+    if (typeof localStorage !== "undefined") localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+  } catch (err) { /* private mode: not being able to save a draft is not fatal */ }
+}
+
+export function clearInvoiceDraft() {
+  try {
+    if (typeof localStorage !== "undefined") localStorage.removeItem(DRAFT_KEY);
+  } catch (err) { /* ignore */ }
 }
 
 export async function renderInvoiceNew(main) {
   const store = state.store;
   const symbol = store.settings.currency_symbol || "R";
   const parents = store.parents.filter((p) => String(p.archived).toLowerCase() !== "true");
+  const saved = loadDraft();
 
   const form = el("form", { class: "screen invoice-form", novalidate: true });
-  let step = 1;
-  let selectedParent = null;
-  let newParent = null;
-  let learnerId = null;
-  let remember = true;
-  const rows = [];
+  const draft = {
+    step: (saved && saved.step) || 1,
+    parentId: (saved && saved.parentId) || null,
+    parentQuery: (saved && saved.parentQuery) || "",
+    newParent: (saved && saved.newParent) || null,
+    learnerId: (saved && saved.learnerId) || null,
+    remember: saved ? saved.remember !== false : true,
+    invoiceDate: (saved && saved.invoiceDate) || "",
+    dueDate: (saved && saved.dueDate) || "",
+    rows: (saved && Array.isArray(saved.rows) && saved.rows.length)
+      ? saved.rows.map(normaliseRow)
+      : [blankRow(store)],
+  };
+  let selectedParent = parents.find((p) => String(p.parent_id) === String(draft.parentId)) || null;
+  if (!selectedParent) draft.parentId = null;
+  let newParent = draft.newParent;
+  let learnerId = draft.learnerId;
+  let remember = draft.remember;
+
+  // row index -> its controls, so a validation failure can be pointed at.
+  const controls = new Map();
 
   const container = el("div");
   form.appendChild(container);
+
+  function persist() {
+    saveDraft({
+      step: draft.step, parentId: draft.parentId, parentQuery: draft.parentQuery,
+      newParent, learnerId, remember, invoiceDate: draft.invoiceDate,
+      dueDate: draft.dueDate, rows: draft.rows,
+    });
+  }
 
   function parentMatches(q) {
     const needle = q.trim().toLowerCase();
@@ -46,17 +98,24 @@ export async function renderInvoiceNew(main) {
   }
 
   function drawStep() {
+    controls.clear();
     container.replaceChildren();
     container.appendChild(stepTabs());
-    if (step === 1) drawStepOne();
-    else if (step === 2) drawStepTwo();
+    if (draft.step === 1) drawStepOne();
+    else if (draft.step === 2) drawStepTwo();
     else drawStepThree();
+  }
+
+  function goTo(n) {
+    draft.step = n;
+    persist();
+    drawStep();
   }
 
   function stepTabs() {
     const mk = (n, label) => el("button", {
-      type: "button", class: `step-tab${step === n ? " active" : ""}`,
-      onClick: () => { if (n < step || canAdvance(n - 1)) { step = n; drawStep(); } },
+      type: "button", class: `step-tab${draft.step === n ? " active" : ""}`,
+      onClick: () => { if (n < draft.step || canAdvance(n - 1)) goTo(n); },
     }, [el("span", { class: "step-num", text: String(n) }), el("span", { text: label })]);
     return el("div", { class: "step-tabs" }, [mk(1, "Who is it for?"), mk(2, "Rate and hours"), mk(3, "Dates")]);
   }
@@ -69,10 +128,13 @@ export async function renderInvoiceNew(main) {
   // ---- step 1 ------------------------------------------------------------
   function drawStepOne() {
     const box = el("section", { class: "step-panel" });
-    const input = el("input", { type: "search", placeholder: "Start typing a parent's name\u2026", autocomplete: "off" });
+    const input = el("input", { type: "search", placeholder: "Start typing a parent's name\u2026",
+      autocomplete: "off", value: draft.parentQuery });
     const results = el("div", { class: "typeahead" });
     const details = el("div", { class: "parent-details" });
     const mobileWrap = el("div", { class: "hidden" });
+    const nextBtn = el("button", { type: "button", class: "btn primary large", text: "Next", disabled: !(selectedParent || newParent),
+      onClick: () => { if (canAdvance(1)) goTo(2); } });
 
     function renderDetails() {
       details.replaceChildren();
@@ -86,7 +148,7 @@ export async function renderInvoiceNew(main) {
           sel.appendChild(el("option", { value: "", text: "No specific learner" }));
           for (const k of kids) sel.appendChild(el("option", { value: String(k.learner_id), text: `${k.name} ${k.surname}`.trim() }));
           sel.value = learnerId || "";
-          sel.addEventListener("change", () => { learnerId = sel.value || null; drawStepTwoPreview(); });
+          sel.addEventListener("change", () => { learnerId = sel.value || null; persist(); });
           details.appendChild(field("Child (optional)", sel, "Leave blank if the invoice is for the parent."));
         } else {
           details.appendChild(el("p", { class: "help", text: "This parent has no saved learners yet." }));
@@ -94,40 +156,50 @@ export async function renderInvoiceNew(main) {
       } else if (newParent) {
         mobileWrap.className = "";
         const mob = el("input", { type: "tel", placeholder: "0821234567", value: newParent.whatsapp || "" });
-        mob.addEventListener("input", () => { newParent.whatsapp = mob.value; });
+        mob.addEventListener("input", () => { newParent.whatsapp = mob.value; persist(); });
         mobileWrap.appendChild(field("Mobile number", mob, "Needed so the invoice can be shared on WhatsApp later."));
         details.appendChild(el("p", { class: "picked", text: `New parent: ${newParent.name}` }));
       }
     }
-    function drawStepTwoPreview() { /* learner change only affects the next step */ }
 
     input.addEventListener("input", () => {
       const q = input.value;
+      draft.parentQuery = q;
       results.replaceChildren();
       selectedParent = null; newParent = null;
+      draft.parentId = null;
       if (q.trim()) {
         const matches = parentMatches(q);
         for (const p of matches) {
           results.appendChild(el("button", {
             type: "button", class: "typeahead-item",
-            onClick: () => { selectedParent = p; input.value = `${p.name} ${p.surname}`.trim(); results.replaceChildren(); renderDetails(); nextBtn.disabled = false; },
+            onClick: () => {
+              selectedParent = p; draft.parentId = p.parent_id;
+              input.value = `${p.name} ${p.surname}`.trim();
+              draft.parentQuery = input.value;
+              results.replaceChildren(); renderDetails();
+              nextBtn.disabled = false; persist();
+            },
           }, [el("strong", { text: `${p.name} ${p.surname}`.trim() }), el("span", { text: p.whatsapp || "" })]));
         }
         results.appendChild(el("button", {
           type: "button", class: "typeahead-item new",
-          onClick: () => { newParent = { name: q.trim(), whatsapp: "" }; selectedParent = null; results.replaceChildren(); renderDetails(); nextBtn.disabled = false; },
+          onClick: () => {
+            newParent = { name: q.trim(), whatsapp: "" }; selectedParent = null; draft.parentId = null;
+            draft.newParent = newParent;
+            results.replaceChildren(); renderDetails();
+            nextBtn.disabled = false; persist();
+          },
         }, [`Create new parent "${q.trim()}"`]));
       }
       nextBtn.disabled = !(selectedParent || newParent);
+      persist();
     });
 
     box.appendChild(field("Who is it for?", input, "Pick a saved parent, or type a new name to save one with this invoice."));
     box.appendChild(results);
     box.appendChild(details);
     box.appendChild(mobileWrap);
-
-    const nextBtn = el("button", { type: "button", class: "btn primary large", text: "Next", disabled: true,
-      onClick: () => { if (canAdvance(1)) { step = 2; drawStep(); } } });
     box.appendChild(el("div", { class: "step-actions" }, [nextBtn]));
     container.appendChild(box);
   }
@@ -136,6 +208,8 @@ export async function renderInvoiceNew(main) {
   function drawStepTwo() {
     const box = el("section", { class: "step-panel" });
     const linesBox = el("div", { class: "lines" });
+    const errorsBox = el("div", { class: "hidden" });
+    let grandTotal = null;
 
     function rateOptions(selectedKey) {
       const sel = el("select", { class: "rate-select", "aria-label": "Rate" });
@@ -146,16 +220,27 @@ export async function renderInvoiceNew(main) {
       return sel;
     }
 
-    function addRow(prefill = {}) {
-      const row = { service: prefill.service || (store.rates[0] && store.rates[0].key) || "primary",
-        mode: "hourly", rate: prefill.rate || "", hours: prefill.hours || "", amount: "" };
-      const idx = rows.length + 1;
+    function renderRow(row, index) {
       const rateSel = rateOptions(row.service);
-      const rateInput = el("input", { type: "text", inputmode: "decimal", value: row.rate, "aria-label": `Rate for line ${idx}` });
-      const hoursInput = el("input", { type: "text", inputmode: "decimal", value: row.hours, "aria-label": `Hours for line ${idx}` });
-      const flatInput = el("input", { type: "text", inputmode: "decimal", value: row.amount, "aria-label": `Full amount for line ${idx}`, class: "hidden" });
-      const modeToggle = el("input", { type: "checkbox", "aria-label": `Charge one total for line ${idx}` });
+      const rateInput = el("input", { type: "text", inputmode: "decimal", value: row.rate, "aria-label": `Rate for line ${index + 1}` });
+      const hoursInput = el("input", { type: "text", inputmode: "decimal", value: row.hours, "aria-label": `Hours for line ${index + 1}` });
+      const flatInput = el("input", { type: "text", inputmode: "decimal", value: row.amount, "aria-label": `Full amount for line ${index + 1}`, class: row.mode === "flat" ? "" : "hidden" });
+      const modeToggle = el("input", { type: "checkbox", checked: row.mode === "flat", "aria-label": `Charge one total for line ${index + 1}` });
+      const descInput = el("input", { type: "text", value: row.description, "aria-label": `Description for line ${index + 1}`, placeholder: labelFor(row.service) });
       const total = el("span", { class: "line-total", text: I.formatMoney(0, "ZAR", symbol) });
+      if (row.mode === "flat") hoursInput.classList.add("hidden");
+
+      // The rate type's own price fills the box the first time, so the owner is
+      // never asked to type a rate that the app already knows. Until this box
+      // was rendered there was nothing to type into at all, which is why the old
+      // "Line 1: enter a rate" message could not be acted on.
+      function prefillRate() {
+        const r = store.rates.find((x) => x.key === row.service);
+        if (r && String(r.rate_cents ?? "") !== "") {
+          rateInput.value = M.formatMoneyPlain(Number(r.rate_cents));
+          row.rate = rateInput.value;
+        }
+      }
 
       function recalc() {
         try {
@@ -179,54 +264,76 @@ export async function renderInvoiceNew(main) {
           rateSel.insertBefore(opt, rateSel.lastElementChild);
           rateSel.value = key;
           row.service = key;
-          recalc();
+          if (!descInput.value.trim()) { descInput.value = name.trim(); row.description = descInput.value; }
+          recalc(); persist();
           return;
         }
+        const previousLabel = labelFor(row.service);
         row.service = rateSel.value;
         const r = store.rates.find((x) => x.key === rateSel.value);
         if (r && row.mode === "hourly") { rateInput.value = M.formatMoneyPlain(Number(r.rate_cents)); row.rate = rateInput.value; }
-        recalc();
+        // Keep the description in step with the rate type unless the owner has
+        // written their own wording - which is what stops a parent's invoice
+        // from reading "High Tuition" when the rate is called High School.
+        if (!descInput.value.trim() || descInput.value.trim() === previousLabel) {
+          descInput.value = labelFor(row.service);
+          row.description = descInput.value;
+        }
+        recalc(); persist();
       });
-      rateInput.addEventListener("input", () => { row.rate = rateInput.value; recalc(); });
-      hoursInput.addEventListener("input", () => { row.hours = hoursInput.value; recalc(); });
-      flatInput.addEventListener("input", () => { row.amount = flatInput.value; recalc(); });
+      rateInput.addEventListener("input", () => { row.rate = rateInput.value; recalc(); persist(); });
+      hoursInput.addEventListener("input", () => { row.hours = hoursInput.value; recalc(); persist(); });
+      flatInput.addEventListener("input", () => { row.amount = flatInput.value; recalc(); persist(); });
+      descInput.addEventListener("input", () => { row.description = descInput.value; persist(); });
       modeToggle.addEventListener("change", () => {
         row.mode = modeToggle.checked ? "flat" : "hourly";
         hoursInput.classList.toggle("hidden", modeToggle.checked);
         flatInput.classList.toggle("hidden", !modeToggle.checked);
-        recalc();
+        recalc(); persist();
       });
 
-      const remove = el("button", { type: "button", class: "btn danger small", text: `Remove line ${idx}`,
+      const remove = el("button", { type: "button", class: "btn danger small", text: `Remove line ${index + 1}`,
         onClick: () => {
-          if (rows.length <= 1) { rateInput.value = ""; hoursInput.value = ""; flatInput.value = ""; recalc(); return; }
-          const at = rows.indexOf(row); rows.splice(at, 1); drawRows();
+          if (draft.rows.length <= 1) {
+            Object.assign(draft.rows[0], { rate: "", hours: "", amount: "" });
+            rateInput.value = ""; hoursInput.value = ""; flatInput.value = ""; recalc(); persist();
+            return;
+          }
+          draft.rows.splice(index, 1);
+          persist(); drawStep();
         } });
 
-      const node = el("div", { class: "line-row" }, [
+      const node = el("div", { class: "line-row", dataset: { line: String(index + 1) } }, [
         el("div", { class: "line-grid" }, [
-          field("Rate", rateSel),
+          field("Rate type", rateSel),
+          field("Rate per hour", rateInput),
           field("Hours", hoursInput),
           field("Charge one total instead of hours", modeToggle),
           field("Full amount", flatInput),
         ]),
+        field("Description (shown on the invoice)", descInput),
         el("div", { class: "line-foot" }, [total, remove]),
       ]);
-      row.node = node; row.recalc = recalc; rows.push(row);
+      controls.set(index, { service: rateSel, rate: rateInput, hours: hoursInput, amount: flatInput, description: descInput, node });
+      // Only fill in a rate the owner has not already typed, so returning to this
+      // step never overwrites their own figure.
+      if (!String(row.rate ?? "").trim() && row.mode !== "flat") prefillRate();
+      recalc();
       return node;
     }
 
     function drawRows() {
       linesBox.replaceChildren();
-      rows.length = 0;
       if (!store.rates.length) store.rates = [{ key: "primary", label: "Primary School", rate_cents: "24000", active: "TRUE" }];
-      linesBox.appendChild(addRow());
+      // Rendered FROM draft.rows; the data is never cleared here, which is what
+      // previously wiped the owner's work whenever they left this step.
+      draft.rows.forEach((row, i) => linesBox.appendChild(renderRow(row, i)));
       updateGrandTotal();
     }
 
     function updateGrandTotal() {
       let total = 0;
-      for (const r of rows) {
+      for (const r of draft.rows) {
         try {
           total += r.mode === "flat"
             ? M.parseMoneyToCents(r.amount || r.rate)
@@ -236,22 +343,85 @@ export async function renderInvoiceNew(main) {
       if (grandTotal) grandTotal.textContent = I.formatMoney(total, "ZAR", symbol);
     }
 
-    const grandTotal = el("span", { class: "grand-total", text: I.formatMoney(0, "ZAR", symbol) });
+    function showErrors(errors) {
+      errorsBox.replaceChildren();
+      errorsBox.className = errors.length ? "" : "hidden";
+      if (!errors.length) return;
+      errorsBox.appendChild(el("ul", { class: "error-box", role: "alert" }, errors.map((e) => el("li", { text: e }))));
+    }
+
+    grandTotal = el("span", { class: "grand-total", text: I.formatMoney(0, "ZAR", symbol) });
     const preview = el("div", { class: "invoice-preview" }, [
       el("span", { text: "Invoice total" }), grandTotal,
     ]);
 
     box.appendChild(el("p", { class: "help", text: "Rate x hours makes a live total. Tick the box to charge one flat total instead. Add another rate for a second line." }));
+    box.appendChild(errorsBox);
     box.appendChild(linesBox);
     box.appendChild(el("button", { type: "button", class: "btn secondary", text: "+ Add another rate",
-      onClick: () => { linesBox.appendChild(addRow()); updateGrandTotal(); } }));
+      onClick: () => { draft.rows.push(blankRow(store)); persist(); drawStep(); } }));
     box.appendChild(preview);
     box.appendChild(el("div", { class: "step-actions" }, [
-      el("button", { type: "button", class: "btn secondary", text: "Back", onClick: () => { step = 1; drawStep(); } }),
-      el("button", { type: "button", class: "btn primary large", text: "Next", onClick: () => { step = 3; drawStep(); } }),
+      el("button", { type: "button", class: "btn secondary", text: "Back", onClick: () => goTo(1) }),
+      el("button", { type: "button", class: "btn primary large", text: "Next", onClick: () => {
+        // Checked HERE, while the fields are on screen, instead of only at the
+        // end - so a missing rate is answered where the owner can see it.
+        const check = checkLines();
+        if (check.errors.length) { showErrors(check.errors); focusFirst(check.problems); return; }
+        goTo(3);
+      } }),
     ]));
     container.appendChild(box);
     drawRows();
+    // Returning to this step after a failed save: show what was wrong at once.
+    if (pendingErrors.length) {
+      showErrors(pendingErrors);
+      focusFirst(pendingProblems);
+      pendingErrors = []; pendingProblems = [];
+    }
+  }
+
+  let pendingErrors = [];
+  let pendingProblems = [];
+
+  function focusFirst(problems) {
+    if (!problems || !problems.length) return;
+    const first = problems[0];
+    const c = controls.get(first.index);
+    if (!c) return;
+    const target = c[first.field] || c.rate;
+    c.node.classList.add("field-error");
+    if (target && target.focus) target.focus({ preventScroll: true });
+    if (c.node.scrollIntoView) c.node.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  /** Local pre-flight of the line rows, naming the row and the box to fill in. */
+  function checkLines() {
+    const errors = [];
+    const problems = [];
+    draft.rows.forEach((row, i) => {
+      const label = `Line ${i + 1} (${row.description || labelFor(row.service)})`;
+      if (row.mode === "flat") {
+        if (String(row.amount ?? "").trim() === "" && String(row.rate ?? "").trim() === "") {
+          errors.push(`${label}: type the total in the "Full amount" box.`);
+          problems.push({ index: i, field: "amount" });
+        }
+        return;
+      }
+      if (String(row.rate ?? "").trim() === "") {
+        errors.push(`${label}: type the hourly rate in the "Rate" box.`);
+        problems.push({ index: i, field: "rate" });
+      }
+      if (String(row.hours ?? "").trim() === "") {
+        errors.push(`${label}: type the number of hours in the "Hours" box.`);
+        problems.push({ index: i, field: "hours" });
+      }
+    });
+    return { errors, problems };
+  }
+
+  function labelFor(service) {
+    return I.serviceLabel(store.rates.find((x) => x.key === service), service);
   }
 
   // ---- step 3 ------------------------------------------------------------
@@ -260,13 +430,19 @@ export async function renderInvoiceNew(main) {
     const preview = I.nextNumberPreview(store.settings);
 
     const numberField = el("input", { type: "text", value: preview.text, readonly: true });
-    const dateField = el("input", { type: "date", value: M.todayIso() });
+    const dateField = el("input", { type: "date", value: draft.invoiceDate || M.todayIso() });
     const termsDays = parseInt(store.settings.due_date_period_days || "7", 10) || 7;
-    const dueField = el("input", { type: "date", value: M.addDays(M.todayIso(), termsDays) });
-    dateField.addEventListener("change", () => { dueField.value = M.addDays(dateField.value, termsDays); });
+    const dueField = el("input", { type: "date", value: draft.dueDate || M.addDays(dateField.value, termsDays) });
+    dateField.addEventListener("change", () => {
+      draft.invoiceDate = dateField.value;
+      dueField.value = M.addDays(dateField.value, termsDays);
+      draft.dueDate = dueField.value;
+      persist();
+    });
+    dueField.addEventListener("change", () => { draft.dueDate = dueField.value; persist(); });
 
-    const rememberBox = el("input", { type: "checkbox", checked: true });
-    rememberBox.addEventListener("change", () => { remember = rememberBox.checked; });
+    const rememberBox = el("input", { type: "checkbox", checked: remember });
+    rememberBox.addEventListener("change", () => { remember = rememberBox.checked; persist(); });
 
     const saveBtn = el("button", { class: "btn primary large", type: "submit", text: "Save invoice" });
     const pdfBtn = el("button", { class: "btn secondary", type: "button", text: "Preview & generate PDF",
@@ -277,7 +453,7 @@ export async function renderInvoiceNew(main) {
     box.appendChild(field("Due date", dueField));
     box.appendChild(field("Remember this rate for this parent", rememberBox, "Fills the price in next time. Never changes an existing invoice."));
     box.appendChild(el("div", { class: "step-actions" }, [
-      el("button", { type: "button", class: "btn secondary", text: "Back", onClick: () => { step = 2; drawStep(); } }),
+      el("button", { type: "button", class: "btn secondary", text: "Back", onClick: () => goTo(2) }),
       saveBtn, pdfBtn,
     ]));
     container.appendChild(box);
@@ -286,29 +462,38 @@ export async function renderInvoiceNew(main) {
   async function ensureParent() {
     if (selectedParent) return selectedParent.parent_id;
     if (newParent) {
-      const saved = await S.saveParent(store, { name: newParent.name, whatsapp: newParent.whatsapp || "" });
+      const savedParent = await S.saveParent(store, { name: newParent.name, whatsapp: newParent.whatsapp || "" });
       await store.reload();
-      selectedParent = store.parents.find((p) => String(p.parent_id) === String(saved.parent_id));
-      return saved.parent_id;
+      selectedParent = store.parents.find((p) => String(p.parent_id) === String(savedParent.parent_id));
+      return savedParent.parent_id;
     }
     throw new Error("Choose or create a parent first.");
   }
 
   function collectLines() {
-    return rows.map((r) => ({
+    return draft.rows.map((r) => ({
       service: r.service, mode: r.mode,
       rate: r.rate, hours: r.hours, amount: r.amount,
+      description: r.description,
     }));
   }
 
   async function generate(alsoPdf) {
-    const saveBtn = form.querySelector('button[type="submit"]');
     try {
+      const check = checkLines();
+      if (check.errors.length) {
+        pendingErrors = check.errors;
+        pendingProblems = check.problems;
+        // Send the owner to the step that holds the problem, with the field
+        // marked, instead of leaving an un-actionable message on another screen.
+        goTo(2);
+        return;
+      }
       const parentId = await ensureParent();
       const lineData = collectLines();
       const invoice = await S.createInvoice(store, {
         parentId, learnerId, lines: lineData,
-        invoiceDate: form.querySelector("input[type=date]").value,
+        invoiceDate: dateFieldValue(),
       });
       if (remember) {
         try {
@@ -318,10 +503,11 @@ export async function renderInvoiceNew(main) {
         } catch (err) { /* remembering a rate is best-effort */ }
       }
       await store.reload();
+      clearInvoiceDraft();
       toast(`Invoice ${invoice.number_text} saved.`, "success");
       if (alsoPdf) {
         const fresh = store.invoices.find((i) => String(i.invoice_id) === String(invoice.invoice_id));
-        const bytes = await buildInvoicePdf(fresh);
+        const bytes = await buildInvoicePdf(fresh, { rates: store.rates });
         // The button says "Preview", so it must actually show the document. A
         // bare download looks like nothing happened on a phone, where the
         // download attribute is often ignored.
@@ -331,11 +517,36 @@ export async function renderInvoiceNew(main) {
     } catch (err) {
       // Honest failure: the user is told plainly and their input stays on screen.
       toast(errorMessage(err), "error");
-      void saveBtn;
     }
+  }
+
+  function dateFieldValue() {
+    const node = form.querySelector("input[type=date]");
+    return node && node.value ? node.value : (draft.invoiceDate || M.todayIso());
   }
 
   form.addEventListener("submit", (e) => { e.preventDefault(); generate(false); });
   drawStep();
   main.appendChild(form);
+}
+
+function blankRow(store) {
+  const first = (store.rates || []).find((r) => String(r.active).toLowerCase() !== "false")
+    || (store.rates || [])[0];
+  return {
+    service: (first && first.key) || "primary",
+    mode: "hourly", rate: "", hours: "", amount: "",
+    description: first ? (first.label || "") : "",
+  };
+}
+
+function normaliseRow(row) {
+  return {
+    service: String(row.service || "primary"),
+    mode: row.mode === "flat" ? "flat" : "hourly",
+    rate: String(row.rate ?? ""),
+    hours: String(row.hours ?? ""),
+    amount: String(row.amount ?? ""),
+    description: String(row.description ?? ""),
+  };
 }

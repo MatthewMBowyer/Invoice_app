@@ -20,7 +20,7 @@ export const DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files";
 const SHEETS_BASE = "https://sheets.googleapis.com/v4/spreadsheets";
 const SHEETS_APPEND = (id, range) =>
   `${SHEETS_BASE}/${encodeURIComponent(id)}/values/${encodeURIComponent(range)}:append` +
-  "?valueInputOption=USER_ENTERED";
+  "?valueInputOption=RAW";
 const SHEETS_GET = (id, range) =>
   `${SHEETS_BASE}/${encodeURIComponent(id)}/values/${encodeURIComponent(range)}`;
 const SHEETS_BATCH_UPDATE = (id) => `${SHEETS_BASE}/${encodeURIComponent(id)}/values:batchUpdate`;
@@ -130,11 +130,25 @@ export function valuesToObjects(columns, values) {
     const obj = {};
     columns.forEach((col, i) => {
       const idx = header.indexOf(col);
-      obj[col] = idx === -1 ? "" : (row[idx] ?? "");
+      obj[col] = idx === -1 ? "" : cleanCell(row[idx]);
     });
     out.push(obj);
   }
   return out;
+}
+
+// Cells written before the RAW fix could be stored as a live Sheets formula
+// (a mobile number typed as "+27..." is a formula to USER_ENTERED), and Sheets
+// then serves the error literal as the cell's value. Those rows are already on
+// disk, so they are neutralised on read rather than left to print on an invoice.
+const SHEET_ERROR_LITERALS = new Set([
+  "#ERROR!", "#REF!", "#DIV/0!", "#VALUE!", "#NAME?", "#N/A", "#NULL!", "#NUM!",
+]);
+
+export function cleanCell(value) {
+  const v = value ?? "";
+  if (typeof v === "string" && SHEET_ERROR_LITERALS.has(v.trim().toUpperCase())) return "";
+  return v;
 }
 
 export function objectsToValues(columns, rows) {
@@ -248,7 +262,7 @@ export class GoogleDriveBackend {
   }
 
   async writeRange(id, range, values) {
-    await this.jsonFetch(`${SHEETS_GET(id, range)}?valueInputOption=USER_ENTERED`, {
+    await this.jsonFetch(`${SHEETS_GET(id, range)}?valueInputOption=RAW`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ range, majorDimension: "ROWS", values }),
@@ -256,7 +270,7 @@ export class GoogleDriveBackend {
   }
 
   async batchWrite(id, updates) {
-    const data = { valueInputOption: "USER_ENTERED", data: updates };
+    const data = { valueInputOption: "RAW", data: updates };
     await this.jsonFetch(SHEETS_BATCH_UPDATE(id), {
       method: "POST",
       headers: { "Content-Type": "application/json" },

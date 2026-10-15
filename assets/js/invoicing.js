@@ -96,17 +96,24 @@ export function isFlatLine(line) {
  * Turn raw form lines into the stored shape. A flat line is stored with
  * rate_cents = amount_cents and hours_milli = 1000 so rate x hours reproduces
  * the amount exactly.
+ *
+ * ``rates`` is optional and is used ONLY to fill in a description the caller
+ * left blank, from the owner's own label for that rate type. Without it a line
+ * with no description stores the bare key ("high"), which is what put the word
+ * "High Tuition" on a parent's invoice.
  */
-export function normaliseLines(lines) {
+export function normaliseLines(lines, rates = []) {
   return lines.map((line) => {
     const service = String(line.service || "").trim() || "Custom";
+    const description = String(line.description || "").trim()
+      || serviceLabel(rates.find((r) => r.key === service), service);
     if (isFlatLine(line)) {
       const src = line.amount !== null && line.amount !== undefined && String(line.amount) !== ""
         ? line.amount : line.rate;
       const amountCents = parseMoneyToCents(src);
       return {
         service,
-        description: String(line.description || "").trim(),
+        description,
         rate_cents: amountCents,
         hours_milli: 1000,
         amount_cents: amountCents,
@@ -118,7 +125,7 @@ export function normaliseLines(lines) {
     const hoursMilli = parseHoursToMilli(line.hours);
     return {
       service,
-      description: String(line.description || "").trim(),
+      description,
       rate_cents: rateCents,
       hours_milli: hoursMilli,
       amount_cents: lineAmountCents(rateCents, hoursMilli),

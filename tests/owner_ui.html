@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<!-- TEST-ONLY UI driver for the five owner-reported defects. Not part of the
+     shipped app. It drives the REAL invoice screen in a real browser against an
+     in-memory Google test double and reports PASS/FAIL into the DOM for headless
+     Chromium to read. -->
+<html lang="en">
+<head><meta charset="utf-8" /><link rel="stylesheet" href="../assets/css/app.css" /></head>
+<body>
+  <div id="app"></div>
+  <pre id="out">pending</pre>
+  <script src="../lib/pdf-lib.min.js"></script>
+  <script type="module">
+    import { state } from "../assets/js/app.js";
+    import { Store, MemoryBackend } from "../assets/js/store.js";
+    import * as S from "../assets/js/service.js";
+    import * as I from "../assets/js/invoicing.js";
+    import { renderInvoiceNew } from "../assets/js/screens/invoice_new.js";
+    import { renderInvoices } from "../assets/js/screens/invoices.js";
+
+    const lines = [];
+    let pass = 0, fail = 0;
+    const ok = (name, cond, detail = "") => {
+      if (cond) { pass++; lines.push("ok   " + name); }
+      else { fail++; lines.push("FAIL " + name + " " + detail); }
+    };
+    const el = (tag, cls) => { const n = document.createElement(tag); if (cls) n.className = cls; return n; };
+    const text = (root) => root.textContent || "";
+    const buttons = (root) => [...root.querySelectorAll("button")];
+    const byText = (root, t) => buttons(root).find((b) => (b.textContent || "").trim() === t);
+    const tick = () => new Promise((r) => setTimeout(r, 60));
+
+    // Unambiguous field lookup: every line-row control carries an aria-label.
+    const byLabel = (root, label) => root.querySelector(`[aria-label="${label}"]`);
+    const typeIn = (node, v) => { node.value = v; node.dispatchEvent(new Event("input", { bubbles: true })); };
+
+    async function render(fn) {
+      const app = document.getElementById("app");
+      app.replaceChildren();
+      const main = el("main", "app-main");
+      app.appendChild(main);
+      await fn(main, { navigate() {}, refresh() {} });
+      return main;
+    }
+
+    // Drive step 1: type a parent's name and pick it from the type-ahead.
+    async function pickParent(main, name) {
+      const search = main.querySelector('input[type="search"]');
+      search.value = name;
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      await tick();
+      const pick = [...main.querySelectorAll(".typeahead-item")]
+        .find((n) => (n.textContent || "").includes(name));
+      pick.click();
+      await tick();
+      return pick;
+    }
+
+    async function next(main) {
+      byText(main, "Next").click();
+      await tick();
+    }
+
+    (async () => {
+      try {
+        // localStorage is shared across runs in this browser profile, so a stale
+        // draft from an earlier test would be a false pass. Clear it up front.
+        localStorage.clear();
+
+        const store = new Store(new MemoryBackend());
+        await store.open(); await store.bootstrapIfEmpty();
+        state.store = store; state.user = { name: "Test", email: "t@example.com" }; state.ready = true;
+        await S.saveParent(store, { name: "Example Parent", surname: "", whatsapp: "+27821234567" });
+        await store.reload();
+
+        // ===================================================================
+        // 5. Typed work is NOT lost when moving between steps
+        // ===================================================================
+        lines.push("-- step 2 work survives a trip back to step 1 and forward again --");
+        const main = await render(renderInvoiceNew);
+        await pickParent(main, "Example Parent");
+        await next(main);
+
+        // Type a rate and hours on step 2. The rate box is prefilled from the
+        // rate type, so it is overwritten here to prove the typed value is used.
+        const rateInput = byLabel(main, "Rate for line 1");
+        const hoursInput = byLabel(main, "Hours for line 1");
+        ok("a rate box exists to type into", Boolean(rateInput));
+        ok("the rate box is prefilled from the rate type", rateInput.value === "240.00", rateInput.value);
+        typeIn(rateInput, "280");
+        typeIn(hoursInput, "4");
+        await tick();
+        ok("the live line total updates to R1,120.00",
+          text(main.querySelector(".line-total")).includes("1,120.00"), text(main.querySelector(".line-total")));
+        ok("the grand total updates to R1,120.00",
+          text(main.querySelector(".grand-total")).includes("1,120.00"), text(main.querySelector(".grand-total")));
+
+        // Go BACK to step 1, then FORWARD again. This is the exact action that
+        // used to wipe everything and leave "Line 1: enter a rate".
+        byText(main, "Back").click();
+        await tick();
+        ok("step 1 is shown after Back", text(main).includes("Who is it for?"));
+        await next(main);
+
+        ok("the rate typed on step 2 survived the round trip",
+          byLabel(main, "Rate for line 1").value === "280", byLabel(main, "Rate for line 1").value);
+        ok("the hours typed on step 2 survived the round trip",
+          byLabel(main, "Hours for line 1").value === "4", byLabel(main, "Hours for line 1").value);
+        ok("the grand total still reads R1,120.00",
+          text(main.querySelector(".grand-total")).includes("1,120.00"), text(main.querySelector(".grand-total")));
+
+        // A full page reload must also keep the work (draft in localStorage).
+        const raw = localStorage.getItem("ctt_invoice_draft");
+        ok("the draft is written to localStorage", Boolean(raw) && raw.includes("280"), String(raw).slice(0, 120));
+        const again = await render(renderInvoiceNew);
+        ok("reopening the screen restores the step", text(again).includes("Rate and hours"), text(again).slice(0, 80));
+        ok("reopening the screen restores the typed rate",
+          byLabel(again, "Rate for line 1").value === "280", byLabel(again, "Rate for line 1").value);
+        ok("reopening the screen restores the typed hours",
+          byLabel(again, "Hours for line 1").value === "4", byLabel(again, "Hours for line 1").value);
+
+        // ===================================================================
+        // 5b. The error message is actionable
+        // ===================================================================
+        lines.push("-- a missing rate is reported on the field, not as 'Line 1: enter a rate' --");
+        localStorage.clear();
+        const blank = await render(renderInvoiceNew);
+        await pickParent(blank, "Example Parent");
+        await next(blank);
+        // Clear BOTH boxes (the rate arrives prefilled) and try to move on.
+        typeIn(byLabel(blank, "Rate for line 1"), "");
+        typeIn(byLabel(blank, "Hours for line 1"), "");
+        byText(blank, "Next").click();
+        await tick();
+        const msg = text(blank);
+        ok("the owner stays on the step holding the problem", text(blank).includes("Rate and hours"));
+        ok("the message names the rate box", msg.includes('type the hourly rate in the "Rate" box'), msg.slice(0, 200));
+        ok("the message names the hours box", msg.includes('type the number of hours in the "Hours" box'), msg.slice(0, 200));
+        ok("the message names the line", msg.includes("Line 1"), msg.slice(0, 200));
+        ok("the message is NOT the old bare wording", !/Line 1: enter a rate\s*$/m.test(msg), msg.slice(0, 200));
+        ok("the offending row is highlighted", Boolean(blank.querySelector(".line-row.field-error")));
+        ok("focus lands on the FIRST offending box (the rate)",
+          document.activeElement === byLabel(blank, "Rate for line 1"),
+          document.activeElement && document.activeElement.getAttribute("aria-label"));
+
+        // Filling the rate in leaves only the hours complaint, focused there.
+        typeIn(byLabel(blank, "Rate for line 1"), "280");
+        byText(blank, "Next").click();
+        await tick();
+        ok("filling the rate clears its complaint",
+          !text(blank).includes('type the hourly rate'), text(blank).slice(0, 200));
+        ok("focus moves to the remaining offending box (the hours)",
+          document.activeElement === byLabel(blank, "Hours for line 1"),
+          document.activeElement && document.activeElement.getAttribute("aria-label"));
+
+        typeIn(byLabel(blank, "Hours for line 1"), "4");
+        byText(blank, "Next").click();
+        await tick();
+        ok("with both boxes filled the owner reaches the dates step",
+          text(blank).includes("Invoice date"), text(blank).slice(0, 120));
+
+        // ===================================================================
+        // 3. The wording is the owner's rate label
+        // ===================================================================
+        lines.push("-- the line wording is the rate label, not 'High Tuition' --");
+        localStorage.clear();
+        const wording = await render(renderInvoiceNew);
+        await pickParent(wording, "Example Parent");
+        await next(wording);
+        const sel = wording.querySelector(".rate-select");
+        sel.value = "high";
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
+        await tick();
+        // The description is the one text box in the row that is not the rate.
+        const desc = byLabel(wording, "Description for line 1");
+        ok("the description box defaults to 'High School'", desc.value === "High School", desc.value);
+        ok("the rate box refills from the new rate type", byLabel(wording, "Rate for line 1").value === "280.00",
+          byLabel(wording, "Rate for line 1").value);
+        ok("the words 'High Tuition' appear nowhere on the screen", !text(wording).includes("High Tuition"));
+
+        // ===================================================================
+        // 2. Banking details are surfaced
+        // ===================================================================
+        lines.push("-- banking: the invoice says so, and one click fixes it --");
+        const bankStore = new Store(new MemoryBackend());
+        await bankStore.open(); await bankStore.bootstrapIfEmpty();
+        state.store = bankStore;
+        await S.saveParent(bankStore, { name: "Example Parent", whatsapp: "0821234567" });
+        await bankStore.reload();
+        const oldInv = await S.createInvoice(bankStore, {
+          parentId: 1, lines: [{ service: "high", mode: "hourly", rate: "280", hours: "4" }], status: "Sent",
+        });
+        await bankStore.reload();
+        const listMain = await render(renderInvoices);
+        const rowBtn = [...listMain.querySelectorAll("button")].find((b) => (b.textContent || "").includes(String(oldInv.number_text)));
+        rowBtn.click();
+        await tick();
+        ok("an invoice with blank banking says so plainly",
+          text(listMain).includes("no banking details") || text(listMain).includes("blank"),
+          text(listMain).slice(0, 200));
+        ok("it tells the owner where to add them", text(listMain).includes("Settings"));
+
+        // Fill the banking in, then reload the list: the repair button appears.
+        await bankStore.saveSettings({ account_holder: "Example Holder", bank_name: "Example Bank", account_number: "1234567890" });
+        await bankStore.reload();
+        const list2 = await render(renderInvoices);
+        [...list2.querySelectorAll("button")].find((b) => (b.textContent || "").includes(String(oldInv.number_text))).click();
+        await tick();
+        const repair = [...list2.querySelectorAll("button")].find((b) => (b.textContent || "").includes("Add my banking details"));
+        ok("a one-click 'Add my banking details' repair is offered", Boolean(repair));
+        repair.click();
+        await tick();
+        await bankStore.reload();
+        const fixed = bankStore.invoices.find((i) => String(i.invoice_id) === String(oldInv.invoice_id));
+        ok("the repair copies the bank name onto the invoice", fixed.snap_bank_name === "Example Bank", fixed.snap_bank_name);
+        ok("the repair copies the account holder", fixed.snap_bank_account_holder === "Example Holder");
+        ok("the repair leaves the total alone", Number(fixed.total_cents) === 112000, String(fixed.total_cents));
+
+        // ===================================================================
+        // 1. No '#ERROR!' reaches the screen
+        // ===================================================================
+        lines.push("-- a stored Sheets error literal is never rendered --");
+        const errStore = new Store(new MemoryBackend());
+        await errStore.open(); await errStore.bootstrapIfEmpty();
+        await S.saveParent(errStore, { name: "Example Parent", whatsapp: "#ERROR!" });
+        await errStore.reload();
+        ok("the error literal is neutralised on read", errStore.parents[0].whatsapp === "",
+          JSON.stringify(errStore.parents[0].whatsapp));
+        state.store = errStore;
+        const parentsMain = await render((await import("../assets/js/screens/parents.js")).renderParents);
+        ok("no '#ERROR!' anywhere on the parents screen", !text(parentsMain).includes("#ERROR"),
+          text(parentsMain).slice(0, 200));
+
+        document.getElementById("out").textContent = lines.join("\n") + `\n\nOWNER_UI checks: ${pass} passed, ${fail} failed\nOWNER_UI: ${fail === 0 ? "PASS" : "FAIL"}`;
+        document.title = fail === 0 ? "PASS" : "FAIL";
+      } catch (err) {
+        document.getElementById("out").textContent = lines.join("\n") + "\nHARNESS ERROR: " + (err && err.stack || err);
+        document.title = "FAIL";
+      }
+    })();
+  </script>
+</body>
+</html>

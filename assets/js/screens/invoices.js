@@ -117,8 +117,31 @@ export async function renderInvoices(main, { refresh }) {
     // document and none of them can silently disagree with the others.
     let cachedBytes = null;
     async function pdfBytes() {
-      if (!cachedBytes) cachedBytes = await buildInvoicePdf(inv);
+      if (!cachedBytes) cachedBytes = await buildInvoicePdf(inv, { rates: store.rates });
       return cachedBytes;
+    }
+
+    // An invoice generated before the banking details were entered keeps blank
+    // payment lines forever, because the PDF prints the values frozen onto the
+    // invoice. This offers the one-click repair, and only when it is needed.
+    if (!S.hasBankingDetails({
+      account_holder: inv.snap_bank_account_holder, account_type: inv.snap_bank_account_type,
+      bank_name: inv.snap_bank_name, branch_code: inv.snap_bank_branch_code,
+      account_number: inv.snap_bank_account_number, swift_bic: inv.snap_bank_swift,
+    })) {
+      if (S.hasBankingDetails(store.settings)) {
+        actions.appendChild(el("button", { class: "btn primary small", text: "Add my banking details", onClick: async () => {
+          try {
+            await S.applyBankingToInvoice(store, inv.invoice_id);
+            await store.reload();
+            toast("Banking details added to this invoice.", "success");
+            refresh();
+          } catch (err) { toast(errorMessage(err), "error"); }
+        } }));
+        detail.appendChild(el("p", { class: "help", text: "This invoice was made before your banking details were saved, so its payment lines are blank. \u201CAdd my banking details\u201D fills them in. It changes nothing else." }));
+      } else {
+        detail.appendChild(el("p", { class: "help", text: "This invoice has no banking details. Add them under Settings \u203A Banking, then press \u201CAdd my banking details\u201D here." }));
+      }
     }
 
     actions.appendChild(el("button", { class: "btn primary small", text: "View invoice", onClick: async () => {
