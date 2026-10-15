@@ -16,6 +16,7 @@
     import * as I from "../assets/js/invoicing.js";
     import { renderInvoiceNew } from "../assets/js/screens/invoice_new.js";
     import { renderInvoices } from "../assets/js/screens/invoices.js";
+    import { renderSettings } from "../assets/js/screens/settings.js";
 
     const lines = [];
     let pass = 0, fail = 0;
@@ -199,9 +200,27 @@
           text(listMain).slice(0, 200));
         ok("it tells the owner where to add them", text(listMain).includes("Settings"));
 
-        // Fill the banking in, then reload the list: the repair button appears.
-        await bankStore.saveSettings({ account_holder: "Example Holder", bank_name: "Example Bank", account_number: "1234567890" });
+        // Fill the banking in through the REAL Settings form (not the API), so
+        // the test covers the path the owner actually uses.
+        const settingsMain = await render(renderSettings);
+        const bankCard = [...settingsMain.querySelectorAll(".settings-card")]
+          .find((c) => text(c).includes("Banking"));
+        ok("Settings has a Banking card", Boolean(bankCard));
+        const bankInputs = [...bankCard.querySelectorAll("input")];
+        ok("the Banking card has all six fields", bankInputs.length === 6, String(bankInputs.length));
+        const bankValues = ["Example Holder", "Cheque", "Example Bank", "679000", "1234567890", "EXAMZAJJ"];
+        bankInputs.forEach((inp, i) => { inp.value = bankValues[i]; });
+        byText(bankCard, "Save").click();
+        await tick();
         await bankStore.reload();
+        ok("saving the Banking card stores the bank name", bankStore.settings.bank_name === "Example Bank",
+          bankStore.settings.bank_name);
+        ok("saving the Banking card stores the account number",
+          bankStore.settings.account_number === "1234567890", bankStore.settings.account_number);
+        ok("saving the Banking card stores the SWIFT code", bankStore.settings.swift_bic === "EXAMZAJJ",
+          bankStore.settings.swift_bic);
+
+        // Reload the invoice list: the repair button now appears.
         const list2 = await render(renderInvoices);
         [...list2.querySelectorAll("button")].find((b) => (b.textContent || "").includes(String(oldInv.number_text))).click();
         await tick();
@@ -213,6 +232,7 @@
         const fixed = bankStore.invoices.find((i) => String(i.invoice_id) === String(oldInv.invoice_id));
         ok("the repair copies the bank name onto the invoice", fixed.snap_bank_name === "Example Bank", fixed.snap_bank_name);
         ok("the repair copies the account holder", fixed.snap_bank_account_holder === "Example Holder");
+        ok("the repair copies the SWIFT code", fixed.snap_bank_swift === "EXAMZAJJ", fixed.snap_bank_swift);
         ok("the repair leaves the total alone", Number(fixed.total_cents) === 112000, String(fixed.total_cents));
 
         // ===================================================================
