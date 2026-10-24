@@ -61,6 +61,8 @@ export async function renderInvoiceNew(main) {
     remember: saved ? saved.remember !== false : true,
     invoiceDate: (saved && saved.invoiceDate) || "",
     dueDate: (saved && saved.dueDate) || "",
+    discountType: (saved && saved.discountType) || "none",
+    discountValue: (saved && saved.discountValue) || "",
     rows: (saved && Array.isArray(saved.rows) && saved.rows.length)
       ? saved.rows.map(normaliseRow)
       : [blankRow(store)],
@@ -82,6 +84,7 @@ export async function renderInvoiceNew(main) {
       step: draft.step, parentId: draft.parentId, parentQuery: draft.parentQuery,
       newParent, learnerId, remember, invoiceDate: draft.invoiceDate,
       dueDate: draft.dueDate, rows: draft.rows,
+      discountType: draft.discountType, discountValue: draft.discountValue,
     });
   }
 
@@ -331,16 +334,79 @@ export async function renderInvoiceNew(main) {
       updateGrandTotal();
     }
 
+    const subtotalLine = el("span", { class: "preview-subtotal", text: I.formatMoney(0, "ZAR", symbol) });
+    const discountLine = el("span", { class: "preview-discount", text: "" });
+    const discountRow = el("div", { class: "preview-row hidden" }, [
+      el("span", { class: "preview-label", text: "Discount" }), discountLine,
+    ]);
+
+    // ---- discount -------------------------------------------------------
+    // Optional, and last: it applies to the sum of every line above it, so the
+    // owner sets it after the rates and hours are in. Blank means no discount.
+    const discountSelect = el("select", { "aria-label": "Discount type" }, [
+      el("option", { value: "none", text: "No discount", selected: draft.discountType === "none" }),
+      el("option", { value: "percent", text: "Percentage off (%)", selected: draft.discountType === "percent" }),
+      el("option", { value: "amount", text: "Rand amount off", selected: draft.discountType === "amount" }),
+    ]);
+    const discountInput = el("input", {
+      type: "text", inputmode: "decimal", value: draft.discountValue,
+      placeholder: draft.discountType === "percent" ? "10" : "150.00",
+      "aria-label": "Discount value",
+      class: draft.discountType === "none" ? "hidden" : "",
+    });
+    const discountLabelNode = el("label", {
+      for: "discount-value",
+      text: draft.discountType === "percent" ? "Percentage off" : "Amount off",
+    });
+    discountInput.id = "discount-value";
+    discountSelect.addEventListener("change", () => {
+      draft.discountType = discountSelect.value;
+      discountInput.className = draft.discountType === "none" ? "hidden" : "";
+      discountInput.placeholder = draft.discountType === "percent" ? "10" : "150.00";
+      discountLabelNode.textContent = draft.discountType === "percent" ? "Percentage off" : "Amount off";
+      if (draft.discountType === "none") draft.discountValue = "";
+      updateGrandTotal();
+      persist();
+    });
+    discountInput.addEventListener("input", () => {
+      draft.discountValue = discountInput.value;
+      updateGrandTotal();
+      persist();
+    });
+    const discountPanel = el("div", { class: "discount-panel" }, [
+      field("Discount (optional)", discountSelect, "Applied to the total of every line above, never to a single line."),
+      el("div", { class: "field" }, [discountLabelNode, discountInput]),
+    ]);
+
+    /**
+     * Subtotal, then the discount if there is one, then what is actually due.
+     * The discount always sits below the line items and below the subtotal - it
+     * can never be mistaken for a line item, because it is applied to the sum of
+     * everything above it.
+     */
     function updateGrandTotal() {
-      let total = 0;
+      let subtotal = 0;
       for (const r of draft.rows) {
         try {
-          total += r.mode === "flat"
+          subtotal += r.mode === "flat"
             ? M.parseMoneyToCents(r.amount || r.rate)
             : M.lineAmountCents(M.parseMoneyToCents(r.rate), M.parseHoursToMilli(r.hours));
         } catch (err) { /* skip unreadable rows */ }
       }
-      if (grandTotal) grandTotal.textContent = I.formatMoney(total, "ZAR", symbol);
+      const totals = I.invoiceTotals(
+        [{ amount_cents: subtotal }],
+        { discountType: draft.discountType, discountValue: draft.discountValue },
+      );
+      if (subtotalLine) subtotalLine.textContent = I.formatMoney(totals.subtotalCents, "ZAR", symbol);
+      if (grandTotal) grandTotal.textContent = I.formatMoney(totals.totalCents, "ZAR", symbol);
+      const hasDiscount = totals.discountCents > 0;
+      discountRow.className = hasDiscount ? "preview-row" : "preview-row hidden";
+      if (hasDiscount) {
+        const label = I.discountLabel(draft.discountType, draft.discountValue, { symbol });
+        discountLine.textContent = label
+          ? `-${I.formatMoney(totals.discountCents, "ZAR", symbol)} (${label})`
+          : `-${I.formatMoney(totals.discountCents, "ZAR", symbol)}`;
+      }
     }
 
     function showErrors(errors) {
@@ -352,7 +418,13 @@ export async function renderInvoiceNew(main) {
 
     grandTotal = el("span", { class: "grand-total", text: I.formatMoney(0, "ZAR", symbol) });
     const preview = el("div", { class: "invoice-preview" }, [
-      el("span", { text: "Invoice total" }), grandTotal,
+      el("div", { class: "preview-row" }, [
+        el("span", { class: "preview-label", text: "Subtotal" }), subtotalLine,
+      ]),
+      discountRow,
+      el("div", { class: "preview-row preview-total" }, [
+        el("span", { text: "Invoice total" }), grandTotal,
+      ]),
     ]);
 
     box.appendChild(el("p", { class: "help", text: "Rate x hours makes a live total. Tick the box to charge one flat total instead. Add another rate for a second line." }));
@@ -360,6 +432,7 @@ export async function renderInvoiceNew(main) {
     box.appendChild(linesBox);
     box.appendChild(el("button", { type: "button", class: "btn secondary", text: "+ Add another rate",
       onClick: () => { draft.rows.push(blankRow(store)); persist(); drawStep(); } }));
+    box.appendChild(discountPanel);
     box.appendChild(preview);
     box.appendChild(el("div", { class: "step-actions" }, [
       el("button", { type: "button", class: "btn secondary", text: "Back", onClick: () => goTo(1) }),
@@ -494,6 +567,8 @@ export async function renderInvoiceNew(main) {
       const invoice = await S.createInvoice(store, {
         parentId, learnerId, lines: lineData,
         invoiceDate: dateFieldValue(),
+        discountType: draft.discountType,
+        discountValue: draft.discountValue,
       });
       if (remember) {
         try {

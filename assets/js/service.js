@@ -65,7 +65,7 @@ export function hasBankingDetails(settings) {
   return BANKING_KEYS.some((k) => String(s[k] ?? "").trim() !== "");
 }
 
-export function validateInvoice(store, { parentId, lines, manualNumber, manualPrefix }) {
+export function validateInvoice(store, { parentId, lines, manualNumber, manualPrefix, discountType = "none", discountValue = "" }) {
   const errors = [];
   const warnings = [];
   const parent = store.parents.find((p) => asInt(p.parent_id) === asInt(parentId));
@@ -123,6 +123,13 @@ export function validateInvoice(store, { parentId, lines, manualNumber, manualPr
     warnings.push(`The invoice total is ${M.formatMoney(0, "ZAR", store.settings.currency_symbol)}. ` +
       "Check the hours and rate, then generate again if you really mean to send a zero-value invoice.");
   }
+  // A discount that swallows the whole bill leaves nothing to pay, which is
+  // almost always a mistyped percentage. Say so rather than send a R0 invoice.
+  const discounted = INV.discountCents(total, discountType, discountValue);
+  if (!errors.length && total > 0 && discounted >= total) {
+    warnings.push("The discount takes the whole invoice to zero. "
+      + "Check the discount, then generate again if you really mean to bill nothing.");
+  }
   if (manualNumber !== null && manualNumber !== undefined && manualNumber !== "") {
     const dup = INV.duplicateNumberError(store.invoices, manualNumber, manualPrefix || "");
     if (dup) errors.push(dup);
@@ -138,11 +145,11 @@ export function validateInvoice(store, { parentId, lines, manualNumber, manualPr
 export async function createInvoice(store, {
   parentId, learnerId = null, lines, invoiceDate = null, dueDate = null,
   status = "Draft", manualNumber = null, manualPrefix = null, allowZero = false,
-  isDemo = false,
+  isDemo = false, discountType = "none", discountValue = "",
 }) {
-  const check = validateInvoice(store, { parentId, lines, manualNumber, manualPrefix });
+  const check = validateInvoice(store, { parentId, lines, manualNumber, manualPrefix, discountType, discountValue });
   if (check.errors.length) throw new ValidationError(check.errors, check.warnings);
-  if (check.warnings.length && !allowZero && check.warnings.some((w) => w.includes("total is"))) {
+  if (check.warnings.length && !allowZero && check.warnings.some((w) => w.includes("zero"))) {
     throw new ValidationError([], check.warnings);
   }
 
@@ -175,7 +182,12 @@ export async function createInvoice(store, {
   const due = dueDate || M.addDays(date, termsDays);
 
   const prepared = INV.normaliseLines(lines, store.rates);
-  const total = INV.invoiceTotalCents(prepared);
+  // The subtotal is the sum of the lines; the discount comes off it and only the
+  // reduced figure is due. Keeping both makes the invoice show its own working.
+  const totals = INV.invoiceTotals(prepared, { discountType, discountValue });
+  const total = totals.totalCents;
+  const symbolForLabel = nextSettings.currency_symbol || "R";
+  const discountText = INV.discountLabel(discountType, discountValue, { symbol: symbolForLabel });
   const invoiceId = nextId(store.invoices, "invoice_id");
 
   const invoice = Object.assign({
@@ -189,7 +201,11 @@ export async function createInvoice(store, {
     due_date: due,
     status,
     currency: nextSettings.currency || "ZAR",
-    subtotal_cents: String(total),
+    subtotal_cents: String(totals.subtotalCents),
+    discount_type: INV.normaliseDiscountType(discountType),
+    discount_value: totals.discountCents > 0 ? String(discountValue ?? "") : "",
+    discount_cents: String(totals.discountCents),
+    discount_label: discountText,
     total_cents: String(total),
     cancelled_at: "",
     cancel_reason: "",
@@ -234,6 +250,7 @@ function decodeForStore(invoice) {
   out.parent_id = asInt(invoice.parent_id);
   out.learner_id = invoice.learner_id === "" ? null : asInt(invoice.learner_id);
   out.subtotal_cents = asInt(invoice.subtotal_cents);
+  out.discount_cents = asInt(invoice.discount_cents);
   out.total_cents = asInt(invoice.total_cents);
   return out;
 }
@@ -441,6 +458,10 @@ export async function duplicateInvoice(store, invoiceId, { invoiceDate = null } 
     lines,
     invoiceDate: date,
     status: "Draft",
+    // A duplicate is the same deal again, so it keeps the discount.
+    discountType: src.discount_type || "none",
+    discountValue: src.discount_type === "percent"
+      ? String(src.discount_value ?? "") : M.formatMoneyPlain(asInt(src.discount_cents)),
   });
   const rows = store.invoices.slice();
   const idx = rows.findIndex((i) => asInt(i.invoice_id) === asInt(inv.invoice_id));

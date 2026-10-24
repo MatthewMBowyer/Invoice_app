@@ -206,7 +206,12 @@ textarea { min-height: 90px; }
 .line-grid { display: grid; grid-template-columns: 1fr; gap: var(--space-2); }
 .line-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-top: var(--space-2); }
 .line-total { font-weight: 800; color: var(--ctt-black); }
-.invoice-preview { display: flex; align-items: center; justify-content: space-between; background: var(--ctt-light-bg); border-radius: var(--radius); padding: var(--space-4); margin-top: var(--space-3); font-weight: 700; }
+.invoice-preview { display: flex; flex-direction: column; gap: var(--space-1); background: var(--ctt-light-bg); border-radius: var(--radius); padding: var(--space-4); margin-top: var(--space-3); font-weight: 700; }
+.invoice-preview .preview-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.preview-label { font-weight: 600; color: var(--ctt-muted, #5b6770); }
+.preview-total { border-top: 1px solid var(--ctt-border, #d8dfe3); padding-top: var(--space-2); margin-top: var(--space-1); }
+.preview-discount { color: var(--ctt-red, #b3261e); }
+.discount-panel { margin-top: var(--space-4); padding-top: var(--space-3); border-top: 1px solid var(--ctt-border, #d8dfe3); }
 .grand-total { font-size: 1.4rem; font-weight: 800; color: var(--ctt-blue); }
 
 /* ---- lists ---------------------------------------------------------- */

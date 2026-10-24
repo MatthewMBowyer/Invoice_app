@@ -170,9 +170,19 @@ export async function buildInvoicePdf(invoice, { PDFLib, rates } = {}) {
   // ---- totals -------------------------------------------------------------
   const total = Number(invoice.total_cents || 0);
   const subtotal = Number(invoice.subtotal_cents != null ? invoice.subtotal_cents : total);
+  const discount = Number(invoice.discount_cents || 0);
   textRight("Subtotal:", right - 90, y, { size: 10, color: grey });
   textRight(money(invoice, subtotal), right, y, { size: 10 });
   y -= 15;
+  // The discount only appears when there is one, so an ordinary invoice is not
+  // cluttered with a "Discount R0.00" row. It sits between the subtotal and the
+  // total, which is where a reader looks to check the arithmetic.
+  if (discount > 0) {
+    const label = String(invoice.discount_label || "").trim();
+    textRight(label ? `Discount (${label}):` : "Discount:", right - 90, y, { size: 10, color: grey });
+    textRight(`-${money(invoice, discount)}`, right, y, { size: 10 });
+    y -= 15;
+  }
   textRight("Total:", right - 90, y, { size: 10, f: bold });
   textRight(money(invoice, total), right, y, { size: 11, f: bold });
   y -= 34;

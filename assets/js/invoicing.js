@@ -7,7 +7,7 @@
 import {
   formatMoney, parseMoneyToCents, parseHoursToMilli, lineAmountCents,
   formatHours, formatMoneyPlain, todayIso, addDays, formatDateDisplay, monthKey,
-  monthLabel, formatYearMonthShort,
+  monthLabel, formatYearMonthShort, roundHalfUp,
 } from "./money.js";
 
 export const STATUSES = ["Draft", "Sent", "Paid", "Overdue", "Cancelled"];
@@ -137,6 +137,81 @@ export function normaliseLines(lines, rates = []) {
 
 export function invoiceTotalCents(lineItems) {
   return lineItems.reduce((acc, l) => acc + Math.trunc(l.amount_cents || 0), 0);
+}
+
+// --------------------------------------------------------------------------
+// discount
+// --------------------------------------------------------------------------
+
+/**
+ * How a discount is expressed. ``percent`` takes a percentage off the subtotal,
+ * ``amount`` takes a fixed number of rands off. Anything else means no
+ * discount, which is what a blank box must mean - an invoice without a discount
+ * stores nothing and prints nothing.
+ */
+export const DISCOUNT_TYPES = ["none", "percent", "amount"];
+
+export function normaliseDiscountType(raw) {
+  const t = String(raw ?? "").trim().toLowerCase();
+  return DISCOUNT_TYPES.includes(t) ? t : "none";
+}
+
+/**
+ * The discount in integer cents, never more than the subtotal.
+ *
+ * A discount larger than the bill would print a negative "amount due", which is
+ * a credit note rather than an invoice, so it is capped at the subtotal and the
+ * total floors at zero. The rounding matches the rest of the app (half up to the
+ * cent), so a percentage of an odd subtotal agrees with the line arithmetic.
+ */
+export function discountCents(subtotalCents, type, value) {
+  const subtotal = Math.trunc(subtotalCents || 0);
+  const t = normaliseDiscountType(type);
+  if (t === "none" || subtotal <= 0) return 0;
+  let cents = 0;
+  if (t === "percent") {
+    const milli = Math.round(Number(value) * 1000);
+    if (!Number.isFinite(milli) || milli <= 0) return 0;
+    cents = roundHalfUp(subtotal * milli, 100 * 1000);
+  } else {
+    try {
+      cents = Math.trunc(parseMoneyToCents(value));
+    } catch (err) {
+      return 0;
+    }
+  }
+  if (cents < 0) return 0;
+  return Math.min(cents, subtotal);
+}
+
+/** Subtotal, discount and the total actually due, all in integer cents. */
+export function invoiceTotals(lineItems, { discountType = "none", discountValue = "" } = {}) {
+  const subtotalCents = invoiceTotalCents(lineItems);
+  const reductionCents = discountCents(subtotalCents, discountType, discountValue);
+  return {
+    subtotalCents,
+    discountCents: reductionCents,
+    totalCents: subtotalCents - reductionCents,
+  };
+}
+
+/** The discount rate as it should read on the invoice: "10%" or "R150.00". */
+export function discountLabel(type, value, { symbol = null, currency = "ZAR" } = {}) {
+  const t = normaliseDiscountType(type);
+  if (t === "percent") {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return "";
+    const text = Number.isInteger(n) ? String(n) : String(Number(n.toFixed(2)));
+    return `${text}%`;
+  }
+  if (t === "amount") {
+    try {
+      return formatMoney(parseMoneyToCents(value), currency, symbol);
+    } catch (err) {
+      return "";
+    }
+  }
+  return "";
 }
 
 // --------------------------------------------------------------------------
