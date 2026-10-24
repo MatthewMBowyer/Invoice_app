@@ -59,6 +59,18 @@ eq("both present kept",
   "Tarryn Fourie - Learner A");
 eq("no dangling separator", I.paymentReference({ snap_payment_reference_template: "{parent_name} - {learner_name}", snap_parent_name: "Solo", snap_learner_name: "", number_text: "1", total_cents: 0 }).endsWith("-"), false);
 
+// YYMM: the invoice's own date as a two-digit year + month, so the reference a
+// parent quotes back identifies the month it was billed for.
+eq("yymm from the invoice date", M.formatYearMonthShort("2026-08-25"), "2608");
+eq("yymm pads a single-digit month", M.formatYearMonthShort("2026-01-05"), "2601");
+eq("yymm handles a century rollover", M.formatYearMonthShort("2031-12-31"), "3112");
+eq("yymm is empty for an unreadable date", M.formatYearMonthShort("not-a-date"), "");
+eq("reference uses yymm", I.paymentReference({ snap_payment_reference_template: "{parent_name} {yymm}", snap_parent_name: "Meghan", invoice_date: "2026-08-25", total_cents: 0 }), "Meghan 2608");
+eq("yymm follows the stored invoice date, not today",
+  I.paymentReference({ snap_payment_reference_template: "{yymm}", invoice_date: "2025-03-01", total_cents: 0 }), "2503");
+eq("yymm composes with a name and date as the owner asked",
+  I.paymentReference({ snap_payment_reference_template: "{parent_name} - {yymm}", snap_parent_name: "Meghan", invoice_date: "2026-08-25", total_cents: 0 }), "Meghan - 2608");
+
 // ---------------------------------------------------------------------------
 section("filenames (AC-30)");
 eq("spec pattern",

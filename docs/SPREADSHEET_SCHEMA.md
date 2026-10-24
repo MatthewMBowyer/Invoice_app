@@ -58,7 +58,7 @@ next invoice number.
 | `branch_code` | banking: branch code | empty |
 | `account_number` | banking: account number | empty |
 | `swift_bic` | banking: SWIFT / BIC | empty |
-| `payment_reference_template` | reference template, `{parent_name}`, `{learner_name}` | `{parent_name} - {learner_name}` |
+| `payment_reference_template` | reference template: `{parent_name}`, `{learner_name}`, `{invoice_number}`, `{amount}`, `{yymm}` (invoice date as YYMM, e.g. `2608`) | `{parent_name} - {learner_name}` |
 | `payment_terms` | terms wording; blank means no terms row at all | empty |
 | `due_date_period_days` | days from invoice date to due date | `7` |
 | `currency` | currency code | `ZAR` |

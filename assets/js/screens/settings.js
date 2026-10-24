@@ -49,7 +49,7 @@ export async function renderSettings(main, ctx) {
   ], "Every label is printed on the invoice; a field left blank prints a blank ruled line."));
 
   box.appendChild(group("Invoicing", [
-    ["payment_reference_template", "Payment reference template", "text", "Use {parent_name} and {learner_name}. A blank variable is removed with its separator."],
+    ["payment_reference_template", "Payment reference template", "text", "Use {parent_name}, {learner_name}, {invoice_number}, {amount} and {yymm} (the invoice date as YYMM, e.g. 2608). A blank variable is removed with its separator."],
     ["payment_terms", "Payment terms", "textarea", "Leave blank for no terms row on the invoice and no hint on the due-date field."],
     ["due_date_period_days", "Due-date period (days)"],
     ["currency_symbol", "Currency symbol"],

@@ -7,7 +7,7 @@
 import {
   formatMoney, parseMoneyToCents, parseHoursToMilli, lineAmountCents,
   formatHours, formatMoneyPlain, todayIso, addDays, formatDateDisplay, monthKey,
-  monthLabel,
+  monthLabel, formatYearMonthShort,
 } from "./money.js";
 
 export const STATUSES = ["Draft", "Sent", "Paid", "Overdue", "Cancelled"];
@@ -155,9 +155,13 @@ export function paymentReference(invoice, { totalCents = null } = {}) {
     learner_name: invoice.snap_learner_name || "",
     invoice_number: invoice.number_text || "",
     amount: formatMoney(total, invoice.currency || "ZAR", symbol),
+    // The invoice's own date, so a re-rendered historical invoice keeps the
+    // reference it was issued with. Today is only the fallback for an invoice
+    // that somehow has no date.
+    yymm: formatYearMonthShort(invoice.invoice_date) || formatYearMonthShort(todayIso()),
   };
   let text = template;
-  for (const key of ["parent_name", "learner_name", "invoice_number", "amount"]) {
+  for (const key of ["parent_name", "learner_name", "invoice_number", "amount", "yymm"]) {
     text = text.split("{" + key + "}").join(String(ctx[key]));
   }
   // An empty variable leaves its separator behind ("Test Parent - "); drop

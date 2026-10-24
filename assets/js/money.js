@@ -212,6 +212,12 @@ export function formatDateLong(iso) {
   return `${p.d} ${MONTHS_LONG[p.m - 1]} ${p.y}`;
 }
 
+/** 2026-08-25 -> "2608" (two-digit year + month, the payment-reference form). */
+export function formatYearMonthShort(iso) {
+  const p = parseIso(iso);
+  return p ? `${String(p.y % 100).padStart(2, "0")}${String(p.m).padStart(2, "0")}` : "";
+}
+
 /** 2026-08-25 -> "2026-08". */
 export function monthKey(iso) {
   const p = parseIso(iso);
