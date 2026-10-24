@@ -13,6 +13,7 @@
 
 import { todayIso } from "./money.js";
 import { DEFAULT_TEMPLATE as WA_TEMPLATE } from "./whatsapp.js";
+import { normaliseDiscountType } from "./invoicing.js";
 
 export const SPREADSHEET_TITLE = "Chloe Travelling Tutors Invoice Data";
 export const FILE_ID_STORAGE_KEY = "ctt_invoice_spreadsheet_id";
@@ -50,7 +51,8 @@ export const COLUMNS = {
   RATES: ["key", "label", "rate_cents", "active", "sort_order", "updated_at"],
   INVOICES: ["invoice_id", "number", "number_text", "prefix", "parent_id",
     "learner_id", "invoice_date", "due_date", "status", "currency",
-    "subtotal_cents", "total_cents", "cancelled_at", "cancel_reason",
+    "subtotal_cents", "discount_type", "discount_value", "discount_cents",
+    "discount_label", "total_cents", "cancelled_at", "cancel_reason",
     "duplicate_of", "date_sent", "created_at", "updated_at",
     "snap_parent_name", "snap_parent_whatsapp", "snap_parent_email",
     "snap_learner_name", "snap_school_level", "snap_business_name",
@@ -65,6 +67,11 @@ export const COLUMNS = {
     "rate_cents", "hours_milli", "amount_cents", "is_flat", "sort_order"],
 };
 
+/** The template this app shipped with before name + YYMM. Recognised so an
+ * install that never chose one is moved to the current default; anything else is
+ * treated as a deliberate choice and never rewritten. */
+export const LEGACY_DEFAULT_REFERENCE = "{parent_name} - {learner_name}";
+
 export const DEFAULT_SETTINGS = {
   business_name: "Chloe's Travelling Tutors",
   business_address: "",
@@ -77,7 +84,7 @@ export const DEFAULT_SETTINGS = {
   branch_code: "",
   account_number: "",
   swift_bic: "",
-  payment_reference_template: "{parent_name} - {learner_name}",
+  payment_reference_template: "{parent_name} {yymm}",
   payment_terms: "",
   due_date_period_days: "7",
   currency: "ZAR",
@@ -463,6 +470,14 @@ export class Store {
     }
     this.settings = obj;
     this._settingsPresent = values.length > 1;
+    // An install that has never chosen a reference template carries the old
+    // name-and-learner default. It is upgraded to name + YYMM, because that is
+    // the reference the owner actually reconciles against a bank statement with
+    // ("Meghan 2608"), and a stored default is indistinguishable from a chosen
+    // one. A template the owner typed is left exactly as it is.
+    if (String(obj.payment_reference_template || "").trim() === LEGACY_DEFAULT_REFERENCE) {
+      obj.payment_reference_template = DEFAULT_SETTINGS.payment_reference_template;
+    }
     void header;
   }
 
@@ -525,6 +540,10 @@ export function decodeInvoice(row) {
   inv.learner_id = row.learner_id === "" ? null : asInt(row.learner_id);
   inv.subtotal_cents = asInt(row.subtotal_cents);
   inv.total_cents = asInt(row.total_cents);
+  // An invoice written before discounts existed has no discount columns at all,
+  // so it must read back as "no discount" rather than as a broken type.
+  inv.discount_type = normaliseDiscountType(row.discount_type);
+  inv.discount_cents = asInt(row.discount_cents);
   inv.currency = row.currency || "ZAR";
   return inv;
 }

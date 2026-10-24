@@ -7,7 +7,7 @@ import * as M from "./money.js";
 import * as INV from "./invoicing.js";
 import {
   StoreError, COLUMNS, DEFAULT_SETTINGS, objectsToValues, encodeInvoice,
-  encodeLine, asInt, asBool, nowIso,
+  encodeLine, asInt, asBool, nowIso, cleanCell,
 } from "./store.js";
 
 export class ValidationError extends Error {
@@ -19,37 +19,49 @@ export class ValidationError extends Error {
   }
 }
 
-/** The values frozen onto the invoice at generation time. */
+/** The values frozen onto the invoice at generation time.
+ *
+ * Every value passes through cleanCell, so a parent, learner or setting whose
+ * cell was poisoned by a spreadsheet error literal is frozen as blank rather
+ * than as "#ERROR!" - the invoice then simply omits the row. The WhatsApp number
+ * is where this actually bit: a number typed as "+27..." was interpreted as a
+ * formula by the old non-RAW write, so the snapshot held the error and the
+ * invoice printed it in place of the number.
+ */
 export function snapshotFields(settings, parent, learner) {
   const s = settings || {};
   const p = parent || {};
   const l = learner || {};
   const full = (o) => `${o.name || ""} ${o.surname || ""}`.trim();
+  const cell = (value) => {
+    const cleaned = cleanCell(value);
+    return cleaned === null || cleaned === undefined ? "" : String(cleaned);
+  };
   return {
-    snap_parent_name: full(p),
-    snap_parent_whatsapp: p.whatsapp || "",
-    snap_parent_email: p.email || "",
-    snap_learner_name: full(l),
-    snap_school_level: l.school_level || "",
-    snap_business_name: s.business_name || "",
-    snap_business_address: s.business_address || "",
-    snap_business_phone: s.business_phone || "",
-    snap_business_email: s.business_email || "",
-    snap_bank_account_holder: s.account_holder || "",
-    snap_bank_account_type: s.account_type || "",
-    snap_bank_name: s.bank_name || "",
-    snap_bank_branch_code: s.branch_code || "",
-    snap_bank_account_number: s.account_number || "",
-    snap_bank_swift: s.swift_bic || "",
-    snap_payment_reference_template: s.payment_reference_template || "",
-    snap_payment_terms: s.payment_terms || "",
-    snap_whatsapp_template: s.whatsapp_template || "",
-    snap_invoice_footer: s.invoice_footer || "",
-    snap_terms_extra: s.terms_extra || "",
-    snap_accent_colour: s.accent_colour || "",
-    snap_currency_symbol: s.currency_symbol || "",
-    snap_invoice_title: s.invoice_title || "",
-    snap_pdf_footer_note: s.pdf_footer_note || "",
+    snap_parent_name: cell(full(p)),
+    snap_parent_whatsapp: cell(p.whatsapp),
+    snap_parent_email: cell(p.email),
+    snap_learner_name: cell(full(l)),
+    snap_school_level: cell(l.school_level),
+    snap_business_name: cell(s.business_name),
+    snap_business_address: cell(s.business_address),
+    snap_business_phone: cell(s.business_phone),
+    snap_business_email: cell(s.business_email),
+    snap_bank_account_holder: cell(s.account_holder),
+    snap_bank_account_type: cell(s.account_type),
+    snap_bank_name: cell(s.bank_name),
+    snap_bank_branch_code: cell(s.branch_code),
+    snap_bank_account_number: cell(s.account_number),
+    snap_bank_swift: cell(s.swift_bic),
+    snap_payment_reference_template: cell(s.payment_reference_template),
+    snap_payment_terms: cell(s.payment_terms),
+    snap_whatsapp_template: cell(s.whatsapp_template),
+    snap_invoice_footer: cell(s.invoice_footer),
+    snap_terms_extra: cell(s.terms_extra),
+    snap_accent_colour: cell(s.accent_colour),
+    snap_currency_symbol: cell(s.currency_symbol),
+    snap_invoice_title: cell(s.invoice_title),
+    snap_pdf_footer_note: cell(s.pdf_footer_note),
   };
 }
 
@@ -65,7 +77,7 @@ export function hasBankingDetails(settings) {
   return BANKING_KEYS.some((k) => String(s[k] ?? "").trim() !== "");
 }
 
-export function validateInvoice(store, { parentId, lines, manualNumber, manualPrefix }) {
+export function validateInvoice(store, { parentId, lines, manualNumber, manualPrefix, discountType = "none", discountValue = "" }) {
   const errors = [];
   const warnings = [];
   const parent = store.parents.find((p) => asInt(p.parent_id) === asInt(parentId));
@@ -123,6 +135,13 @@ export function validateInvoice(store, { parentId, lines, manualNumber, manualPr
     warnings.push(`The invoice total is ${M.formatMoney(0, "ZAR", store.settings.currency_symbol)}. ` +
       "Check the hours and rate, then generate again if you really mean to send a zero-value invoice.");
   }
+  // A discount that swallows the whole bill leaves nothing to pay, which is
+  // almost always a mistyped percentage. Say so rather than send a R0 invoice.
+  const discounted = INV.discountCents(total, discountType, discountValue);
+  if (!errors.length && total > 0 && discounted >= total) {
+    warnings.push("The discount takes the whole invoice to zero. "
+      + "Check the discount, then generate again if you really mean to bill nothing.");
+  }
   if (manualNumber !== null && manualNumber !== undefined && manualNumber !== "") {
     const dup = INV.duplicateNumberError(store.invoices, manualNumber, manualPrefix || "");
     if (dup) errors.push(dup);
@@ -138,11 +157,11 @@ export function validateInvoice(store, { parentId, lines, manualNumber, manualPr
 export async function createInvoice(store, {
   parentId, learnerId = null, lines, invoiceDate = null, dueDate = null,
   status = "Draft", manualNumber = null, manualPrefix = null, allowZero = false,
-  isDemo = false,
+  isDemo = false, discountType = "none", discountValue = "",
 }) {
-  const check = validateInvoice(store, { parentId, lines, manualNumber, manualPrefix });
+  const check = validateInvoice(store, { parentId, lines, manualNumber, manualPrefix, discountType, discountValue });
   if (check.errors.length) throw new ValidationError(check.errors, check.warnings);
-  if (check.warnings.length && !allowZero && check.warnings.some((w) => w.includes("total is"))) {
+  if (check.warnings.length && !allowZero && check.warnings.some((w) => w.includes("zero"))) {
     throw new ValidationError([], check.warnings);
   }
 
@@ -175,7 +194,12 @@ export async function createInvoice(store, {
   const due = dueDate || M.addDays(date, termsDays);
 
   const prepared = INV.normaliseLines(lines, store.rates);
-  const total = INV.invoiceTotalCents(prepared);
+  // The subtotal is the sum of the lines; the discount comes off it and only the
+  // reduced figure is due. Keeping both makes the invoice show its own working.
+  const totals = INV.invoiceTotals(prepared, { discountType, discountValue });
+  const total = totals.totalCents;
+  const symbolForLabel = nextSettings.currency_symbol || "R";
+  const discountText = INV.discountLabel(discountType, discountValue, { symbol: symbolForLabel });
   const invoiceId = nextId(store.invoices, "invoice_id");
 
   const invoice = Object.assign({
@@ -189,7 +213,11 @@ export async function createInvoice(store, {
     due_date: due,
     status,
     currency: nextSettings.currency || "ZAR",
-    subtotal_cents: String(total),
+    subtotal_cents: String(totals.subtotalCents),
+    discount_type: INV.normaliseDiscountType(discountType),
+    discount_value: totals.discountCents > 0 ? String(discountValue ?? "") : "",
+    discount_cents: String(totals.discountCents),
+    discount_label: discountText,
     total_cents: String(total),
     cancelled_at: "",
     cancel_reason: "",
@@ -234,6 +262,7 @@ function decodeForStore(invoice) {
   out.parent_id = asInt(invoice.parent_id);
   out.learner_id = invoice.learner_id === "" ? null : asInt(invoice.learner_id);
   out.subtotal_cents = asInt(invoice.subtotal_cents);
+  out.discount_cents = asInt(invoice.discount_cents);
   out.total_cents = asInt(invoice.total_cents);
   return out;
 }
@@ -441,6 +470,10 @@ export async function duplicateInvoice(store, invoiceId, { invoiceDate = null } 
     lines,
     invoiceDate: date,
     status: "Draft",
+    // A duplicate is the same deal again, so it keeps the discount.
+    discountType: src.discount_type || "none",
+    discountValue: src.discount_type === "percent"
+      ? String(src.discount_value ?? "") : M.formatMoneyPlain(asInt(src.discount_cents)),
   });
   const rows = store.invoices.slice();
   const idx = rows.findIndex((i) => asInt(i.invoice_id) === asInt(inv.invoice_id));

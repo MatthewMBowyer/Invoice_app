@@ -65,6 +65,13 @@ def main() -> None:
     out["parse_hours"] = [safe(M.parse_hours_to_milli, v) for v in corpus["parse_hours"]]
     out["format_hours"] = [M.format_hours(h) for h in corpus["format_hours"]]
     out["line_amount"] = [M.line_amount_cents(r, h) for r, h in corpus["line_amount"]]
+    out["discount_cents"] = [
+        M.discount_cents(s, kind, value)
+        for (s, kind, value) in corpus["discount"]
+    ]
+    out["discount_label"] = [
+        M.discount_label(kind, value) for (kind, value) in corpus["discount_label"]
+    ]
     out["sanitise_symbol"] = [M.sanitise_symbol(v) for v in corpus["sanitise_symbol"]]
 
     out["reference"] = [

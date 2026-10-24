@@ -56,17 +56,25 @@ export async function renderInvoiceNew(main) {
     step: (saved && saved.step) || 1,
     parentId: (saved && saved.parentId) || null,
     parentQuery: (saved && saved.parentQuery) || "",
+    parentWhatsapp: (saved && saved.parentWhatsapp) || "",
     newParent: (saved && saved.newParent) || null,
     learnerId: (saved && saved.learnerId) || null,
     remember: saved ? saved.remember !== false : true,
     invoiceDate: (saved && saved.invoiceDate) || "",
     dueDate: (saved && saved.dueDate) || "",
+    discountType: (saved && saved.discountType) || "none",
+    discountValue: (saved && saved.discountValue) || "",
     rows: (saved && Array.isArray(saved.rows) && saved.rows.length)
       ? saved.rows.map(normaliseRow)
       : [blankRow(store)],
   };
   let selectedParent = parents.find((p) => String(p.parent_id) === String(draft.parentId)) || null;
   if (!selectedParent) draft.parentId = null;
+  // A number typed on this screen but not yet generated is re-applied here, so
+  // stepping back and forth (or a re-render) does not silently discard it.
+  else if (draft.parentWhatsapp) {
+    selectedParent = Object.assign({}, selectedParent, { whatsapp: draft.parentWhatsapp });
+  }
   let newParent = draft.newParent;
   let learnerId = draft.learnerId;
   let remember = draft.remember;
@@ -80,8 +88,10 @@ export async function renderInvoiceNew(main) {
   function persist() {
     saveDraft({
       step: draft.step, parentId: draft.parentId, parentQuery: draft.parentQuery,
+      parentWhatsapp: draft.parentWhatsapp,
       newParent, learnerId, remember, invoiceDate: draft.invoiceDate,
       dueDate: draft.dueDate, rows: draft.rows,
+      discountType: draft.discountType, discountValue: draft.discountValue,
     });
   }
 
@@ -142,6 +152,21 @@ export async function renderInvoiceNew(main) {
       mobileWrap.className = "hidden";
       if (selectedParent) {
         details.appendChild(el("p", { class: "picked", text: `Picked: ${selectedParent.name} ${selectedParent.surname}`.trim() }));
+        // A parent saved before their number was known keeps printing a blank
+        // WhatsApp row forever, because the invoice freezes the number it was
+        // given. This field edits the number on the invoice being made, so the
+        // missing one can be filled in without abandoning the invoice and going
+        // to the Parents screen first.
+        mobileWrap.className = "";
+        const mob = el("input", { type: "tel", placeholder: "0821234567", value: selectedParent.whatsapp || "" });
+        mob.addEventListener("input", () => {
+          selectedParent = Object.assign({}, selectedParent, { whatsapp: mob.value });
+          draft.parentWhatsapp = mob.value;
+          persist();
+        });
+        mobileWrap.appendChild(field("Mobile number", mob,
+          "Printed on the invoice and used for the WhatsApp link. Saved to this parent when you generate."));
+        details.appendChild(mobileWrap);
         const kids = store.learners.filter((l) => String(l.parent_id) === String(selectedParent.parent_id));
         if (kids.length) {
           const sel = el("select", { class: "child-picker", "aria-label": "Learner (optional)" });
@@ -158,6 +183,7 @@ export async function renderInvoiceNew(main) {
         const mob = el("input", { type: "tel", placeholder: "0821234567", value: newParent.whatsapp || "" });
         mob.addEventListener("input", () => { newParent.whatsapp = mob.value; persist(); });
         mobileWrap.appendChild(field("Mobile number", mob, "Needed so the invoice can be shared on WhatsApp later."));
+        details.appendChild(mobileWrap);
         details.appendChild(el("p", { class: "picked", text: `New parent: ${newParent.name}` }));
       }
     }
@@ -168,6 +194,7 @@ export async function renderInvoiceNew(main) {
       results.replaceChildren();
       selectedParent = null; newParent = null;
       draft.parentId = null;
+      draft.parentWhatsapp = "";
       if (q.trim()) {
         const matches = parentMatches(q);
         for (const p of matches) {
@@ -175,6 +202,7 @@ export async function renderInvoiceNew(main) {
             type: "button", class: "typeahead-item",
             onClick: () => {
               selectedParent = p; draft.parentId = p.parent_id;
+              draft.parentWhatsapp = "";
               input.value = `${p.name} ${p.surname}`.trim();
               draft.parentQuery = input.value;
               results.replaceChildren(); renderDetails();
@@ -331,16 +359,79 @@ export async function renderInvoiceNew(main) {
       updateGrandTotal();
     }
 
+    const subtotalLine = el("span", { class: "preview-subtotal", text: I.formatMoney(0, "ZAR", symbol) });
+    const discountLine = el("span", { class: "preview-discount", text: "" });
+    const discountRow = el("div", { class: "preview-row hidden" }, [
+      el("span", { class: "preview-label", text: "Discount" }), discountLine,
+    ]);
+
+    // ---- discount -------------------------------------------------------
+    // Optional, and last: it applies to the sum of every line above it, so the
+    // owner sets it after the rates and hours are in. Blank means no discount.
+    const discountSelect = el("select", { "aria-label": "Discount type" }, [
+      el("option", { value: "none", text: "No discount", selected: draft.discountType === "none" }),
+      el("option", { value: "percent", text: "Percentage off (%)", selected: draft.discountType === "percent" }),
+      el("option", { value: "amount", text: "Rand amount off", selected: draft.discountType === "amount" }),
+    ]);
+    const discountInput = el("input", {
+      type: "text", inputmode: "decimal", value: draft.discountValue,
+      placeholder: draft.discountType === "percent" ? "10" : "150.00",
+      "aria-label": "Discount value",
+      class: draft.discountType === "none" ? "hidden" : "",
+    });
+    const discountLabelNode = el("label", {
+      for: "discount-value",
+      text: draft.discountType === "percent" ? "Percentage off" : "Amount off",
+    });
+    discountInput.id = "discount-value";
+    discountSelect.addEventListener("change", () => {
+      draft.discountType = discountSelect.value;
+      discountInput.className = draft.discountType === "none" ? "hidden" : "";
+      discountInput.placeholder = draft.discountType === "percent" ? "10" : "150.00";
+      discountLabelNode.textContent = draft.discountType === "percent" ? "Percentage off" : "Amount off";
+      if (draft.discountType === "none") draft.discountValue = "";
+      updateGrandTotal();
+      persist();
+    });
+    discountInput.addEventListener("input", () => {
+      draft.discountValue = discountInput.value;
+      updateGrandTotal();
+      persist();
+    });
+    const discountPanel = el("div", { class: "discount-panel" }, [
+      field("Discount (optional)", discountSelect, "Applied to the total of every line above, never to a single line."),
+      el("div", { class: "field" }, [discountLabelNode, discountInput]),
+    ]);
+
+    /**
+     * Subtotal, then the discount if there is one, then what is actually due.
+     * The discount always sits below the line items and below the subtotal - it
+     * can never be mistaken for a line item, because it is applied to the sum of
+     * everything above it.
+     */
     function updateGrandTotal() {
-      let total = 0;
+      let subtotal = 0;
       for (const r of draft.rows) {
         try {
-          total += r.mode === "flat"
+          subtotal += r.mode === "flat"
             ? M.parseMoneyToCents(r.amount || r.rate)
             : M.lineAmountCents(M.parseMoneyToCents(r.rate), M.parseHoursToMilli(r.hours));
         } catch (err) { /* skip unreadable rows */ }
       }
-      if (grandTotal) grandTotal.textContent = I.formatMoney(total, "ZAR", symbol);
+      const totals = I.invoiceTotals(
+        [{ amount_cents: subtotal }],
+        { discountType: draft.discountType, discountValue: draft.discountValue },
+      );
+      if (subtotalLine) subtotalLine.textContent = I.formatMoney(totals.subtotalCents, "ZAR", symbol);
+      if (grandTotal) grandTotal.textContent = I.formatMoney(totals.totalCents, "ZAR", symbol);
+      const hasDiscount = totals.discountCents > 0;
+      discountRow.className = hasDiscount ? "preview-row" : "preview-row hidden";
+      if (hasDiscount) {
+        const label = I.discountLabel(draft.discountType, draft.discountValue, { symbol });
+        discountLine.textContent = label
+          ? `-${I.formatMoney(totals.discountCents, "ZAR", symbol)} (${label})`
+          : `-${I.formatMoney(totals.discountCents, "ZAR", symbol)}`;
+      }
     }
 
     function showErrors(errors) {
@@ -352,7 +443,13 @@ export async function renderInvoiceNew(main) {
 
     grandTotal = el("span", { class: "grand-total", text: I.formatMoney(0, "ZAR", symbol) });
     const preview = el("div", { class: "invoice-preview" }, [
-      el("span", { text: "Invoice total" }), grandTotal,
+      el("div", { class: "preview-row" }, [
+        el("span", { class: "preview-label", text: "Subtotal" }), subtotalLine,
+      ]),
+      discountRow,
+      el("div", { class: "preview-row preview-total" }, [
+        el("span", { text: "Invoice total" }), grandTotal,
+      ]),
     ]);
 
     box.appendChild(el("p", { class: "help", text: "Rate x hours makes a live total. Tick the box to charge one flat total instead. Add another rate for a second line." }));
@@ -360,6 +457,7 @@ export async function renderInvoiceNew(main) {
     box.appendChild(linesBox);
     box.appendChild(el("button", { type: "button", class: "btn secondary", text: "+ Add another rate",
       onClick: () => { draft.rows.push(blankRow(store)); persist(); drawStep(); } }));
+    box.appendChild(discountPanel);
     box.appendChild(preview);
     box.appendChild(el("div", { class: "step-actions" }, [
       el("button", { type: "button", class: "btn secondary", text: "Back", onClick: () => goTo(1) }),
@@ -460,7 +558,25 @@ export async function renderInvoiceNew(main) {
   }
 
   async function ensureParent() {
-    if (selectedParent) return selectedParent.parent_id;
+    if (selectedParent) {
+      // The mobile number may have been filled in on this screen, so it is
+      // written back before the invoice is made - the invoice freezes whatever
+      // the parent record holds, so saving after generation would be too late.
+      const typed = String(selectedParent.whatsapp || "").trim();
+      const original = String((parents.find((p) => String(p.parent_id) === String(selectedParent.parent_id)) || {}).whatsapp || "").trim();
+      if (typed !== original) {
+        const saved = await S.saveParent(store, {
+          parentId: selectedParent.parent_id,
+          name: selectedParent.name, surname: selectedParent.surname,
+          whatsapp: typed, email: selectedParent.email,
+          defaultRateCents: Number.isFinite(parseInt(selectedParent.default_rate_cents, 10))
+            ? parseInt(selectedParent.default_rate_cents, 10) : 0,
+        });
+        await store.reload();
+        selectedParent = store.parents.find((p) => String(p.parent_id) === String(saved.parent_id));
+      }
+      return selectedParent.parent_id;
+    }
     if (newParent) {
       const savedParent = await S.saveParent(store, { name: newParent.name, whatsapp: newParent.whatsapp || "" });
       await store.reload();
@@ -494,6 +610,8 @@ export async function renderInvoiceNew(main) {
       const invoice = await S.createInvoice(store, {
         parentId, learnerId, lines: lineData,
         invoiceDate: dateFieldValue(),
+        discountType: draft.discountType,
+        discountValue: draft.discountValue,
       });
       if (remember) {
         try {

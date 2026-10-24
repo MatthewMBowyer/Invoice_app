@@ -2,8 +2,14 @@
 //
 // This is the single auth gate. There is no server: the OAuth access token is
 // requested with google.accounts.oauth2 (the GIS token model, which needs no
-// client secret). The token is kept in a module-private WeakMap and is never
-// written to the DOM, a URL, localStorage, a log or an error message.
+// client secret). The token is never written to the DOM, a URL, a log or an
+// error message.
+//
+// It IS kept in sessionStorage so a page refresh does not force a fresh sign-in.
+// sessionStorage is deliberate: it is tab-scoped, so the token disappears when
+// the tab closes and is never shared with another tab or another window. Writing
+// it to localStorage instead would leave a live Drive credential on disk
+// indefinitely, which is a much larger exposure than a refresh surviving.
 
 export const CLIENT_ID =
   "521516474299-dda9340m27adjkft0pjq8i2ds45jurie.apps.googleusercontent.com";
@@ -65,12 +71,65 @@ export function rememberedEmail() {
   }
 }
 
+// The token is held for the length of a tab session only, so a refresh survives
+// but a closed tab does not. Stored as {token, expiresAt, profile}.
+const SESSION_KEY = "ctt_invoice_session";
+
+function sessionStorageSafe() {
+  try {
+    return typeof sessionStorage !== "undefined" ? sessionStorage : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function writeSession(state) {
+  const store = sessionStorageSafe();
+  if (!store) return;
+  try {
+    if (state && state.token && Date.now() < state.expiresAt) {
+      store.setItem(SESSION_KEY, JSON.stringify({
+        token: state.token, expiresAt: state.expiresAt, profile: state.profile,
+      }));
+    } else {
+      store.removeItem(SESSION_KEY);
+    }
+  } catch (err) { /* private mode or quota: the refresh just re-prompts */ }
+}
+
+function readSession() {
+  const store = sessionStorageSafe();
+  if (!store) return null;
+  try {
+    const raw = store.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !parsed.token || !(Number(parsed.expiresAt) > Date.now())) {
+      store.removeItem(SESSION_KEY);
+      return null;
+    }
+    return { token: parsed.token, expiresAt: Number(parsed.expiresAt), profile: parsed.profile || null };
+  } catch (err) {
+    return null;
+  }
+}
+
+export function clearStoredSession() {
+  const store = sessionStorageSafe();
+  if (!store) return;
+  try { store.removeItem(SESSION_KEY); } catch (err) { /* nothing to clear */ }
+}
+
 export class Auth {
   constructor({ clientId = CLIENT_ID, scopes = SCOPES, gis = null } = {}) {
+    // A token already issued in this tab is restored first, so a refresh boots
+    // straight into the app instead of asking Google again for a token the
+    // browser has not yet forgotten.
+    const saved = readSession();
     STATE.set(this, {
-      token: null,
-      expiresAt: 0,
-      profile: null,
+      token: saved ? saved.token : null,
+      expiresAt: saved ? saved.expiresAt : 0,
+      profile: saved ? saved.profile : null,
       tokenClient: null,
       resolvePending: null,
       rejectPending: null,
@@ -94,11 +153,28 @@ export class Auth {
     return s.profile ? { name: s.profile.name, email: s.profile.email } : null;
   }
 
+  /**
+   * The Google Identity Services oauth2 API, read at the moment it is needed
+   * rather than captured in the constructor.
+   *
+   * ``auth`` is a module-level singleton, so it is constructed while the module
+   * is evaluated - which can happen before the deferred GIS <script> has run.
+   * Snapshotting window.google once meant a null stayed null for the lifetime of
+   * the page, so every silent sign-in failed and a refresh always landed on the
+   * sign-in card. Reading it per call lets a late-loading GIS be picked up.
+   */
+  _gisApi() {
+    const g = this.gis || (typeof window !== "undefined" ? window.google : null);
+    if (!g || !g.accounts || !g.accounts.oauth2) return null;
+    this.gis = g;
+    return g.accounts.oauth2;
+  }
+
   init() {
-    if (!this.gis || !this.gis.accounts || !this.gis.accounts.oauth2) {
+    if (!this._gisApi()) {
       throw new Error("Google Identity Services did not load.");
     }
-    STATE.get(this).tokenClient = this.gis.accounts.oauth2.initTokenClient({
+    STATE.get(this).tokenClient = this._gisApi().initTokenClient({
       client_id: this.clientId,
       scope: this.scopes,
       callback: (resp) => this._handleTokenResponse(resp),
@@ -125,7 +201,13 @@ export class Auth {
       s.token = resp.access_token;
       const seconds = Number(resp.expires_in || 3600);
       s.expiresAt = Date.now() + Math.min(seconds * 1000, TOKEN_LIFETIME_MS);
-      this._fetchProfile(resp.access_token).then(() => this._emit("signed-in"));
+      writeSession(s);
+      this._fetchProfile(resp.access_token).then(() => {
+        // The profile is part of the restored session, so it is stored again
+        // once it is known - otherwise a refresh loses the signed-in name.
+        writeSession(STATE.get(this));
+        this._emit("signed-in");
+      });
       if (s.resolvePending) {
         const done = s.resolvePending;
         s.resolvePending = null;
@@ -253,8 +335,10 @@ export class Auth {
     // remembered account hint goes with it. (Chrome's own Google session is
     // untouched - that is the browser's, not this app's.)
     rememberSignedInEmail("");
-    if (token && this.gis && this.gis.accounts && this.gis.accounts.oauth2) {
-      this.gis.accounts.oauth2.revoke(token, () => {});
+    clearStoredSession();
+    const api = this._gisApi();
+    if (token && api) {
+      api.revoke(token, () => {});
     }
     this._emit("signed-out");
   }
