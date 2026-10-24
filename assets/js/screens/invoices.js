@@ -8,6 +8,7 @@ import * as W from "../whatsapp.js";
 import * as S from "../service.js";
 import { buildInvoicePdf } from "../pdf.js";
 import { state, navigate, errorMessage } from "../app.js";
+import { cleanCell } from "../store.js";
 
 export async function renderInvoices(main, { refresh }) {
   const store = state.store;
@@ -69,7 +70,7 @@ export async function renderInvoices(main, { refresh }) {
       }, [
         el("div", { class: "inv-main" }, [
           el("strong", { text: `#${inv.number_text}` }),
-          el("span", { text: inv.snap_parent_name || (parent ? `${parent.name} ${parent.surname}` : "") }),
+          el("span", { text: cleanCell(inv.snap_parent_name) || (parent ? `${parent.name} ${parent.surname}` : "") }),
         ]),
         el("div", { class: "inv-side" }, [
           el("span", { class: "inv-amount", text: I.formatMoney(inv.total_cents, "ZAR", store.settings.currency_symbol || "R") }),
@@ -88,7 +89,7 @@ export async function renderInvoices(main, { refresh }) {
     main.appendChild(detail);
     detail.appendChild(el("button", { class: "btn secondary small", text: "Back", onClick: () => detail.remove() }));
     detail.appendChild(el("h2", { text: `Invoice ${inv.number_text}` }));
-    detail.appendChild(el("p", { text: `${inv.snap_parent_name || ""} ${inv.snap_learner_name ? "\u2022 " + inv.snap_learner_name : ""}` }));
+    detail.appendChild(el("p", { text: `${cleanCell(inv.snap_parent_name) || ""} ${cleanCell(inv.snap_learner_name) ? "\u2022 " + cleanCell(inv.snap_learner_name) : ""}` }));
     detail.appendChild(el("p", { text: `Issued ${I.formatDateDisplay(inv.invoice_date)} \u2022 Due ${I.formatDateDisplay(inv.due_date)}` }));
     detail.appendChild(el("p", { class: "inv-amount", text: I.formatMoney(inv.total_cents, "ZAR", store.settings.currency_symbol || "R") }));
     detail.appendChild(el("p", { class: "help", text: `Payment reference: ${I.paymentReference(inv)}` }));

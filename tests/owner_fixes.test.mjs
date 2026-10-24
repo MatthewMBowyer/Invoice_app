@@ -118,6 +118,21 @@ async function main() {
   check("the PDF says 'High School'", t1.includes("High School"), t1.replace(/\n/g, " | "));
   check("the PDF never says 'High Tuition'", !t1.includes("High Tuition"));
 
+  // A stored snapshot can ALREADY carry the literal from before the RAW fix, so
+  // the renderer has to neutralise it too - cleaning only on the way in leaves
+  // every invoice issued so far printing "#ERROR!" under the parent's name.
+  const poisoned = Object.assign({}, stored, {
+    snap_parent_whatsapp: "#ERROR!",
+    snap_bank_name: "#REF!",
+    snap_bank_account_number: "#ERROR!",
+  });
+  const pp = join(OUT, "ownerfix-poisoned.pdf");
+  writeFileSync(pp, Buffer.from(await buildInvoicePdf(poisoned, { PDFLib, rates: store.rates })));
+  const tp = pdfText(pp);
+  check("a poisoned snapshot never prints #ERROR!", !tp.includes("#ERROR!"), tp.replace(/\n/g, " | "));
+  check("a poisoned snapshot never prints #REF!", !tp.includes("#REF!"));
+  check("the parent name still prints", tp.includes("Example Parent"));
+
   // An invoice whose line description was already stored as the bare key.
   const legacy = Object.assign({}, stored, {
     line_items: [Object.assign({}, stored.line_items[0], { description: "" })],

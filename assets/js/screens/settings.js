@@ -48,14 +48,32 @@ export async function renderSettings(main, ctx) {
     ["swift_bic", "SWIFT / BIC"],
   ], "Every label is printed on the invoice; a field left blank prints a blank ruled line."));
 
-  box.appendChild(group("Invoicing", [
+  const invoicingCard = group("Invoicing", [
     ["payment_reference_template", "Payment reference template", "text", "Use {parent_name}, {learner_name}, {invoice_number}, {amount} and {yymm} (the invoice date as YYMM, e.g. 2608). A blank variable is removed with its separator."],
     ["payment_terms", "Payment terms", "textarea", "Leave blank for no terms row on the invoice and no hint on the due-date field."],
     ["due_date_period_days", "Due-date period (days)"],
     ["currency_symbol", "Currency symbol"],
     ["invoice_prefix", "Invoice number prefix"],
     ["next_invoice_number", "Next invoice number"],
-  ]));
+  ]);
+  // The reference the owner actually wants is the payer's name followed by the
+  // month it was billed in, so it can be matched to a bank statement without
+  // asking. Offered as a preset because typing the variables by hand is exactly
+  // the step that gets skipped.
+  invoicingCard.insertBefore(
+    el("div", { class: "field" }, [
+      el("button", { class: "btn secondary", text: "Use name + YYMM", onClick: async () => {
+        try {
+          await store.saveSettings({ payment_reference_template: "{parent_name} {yymm}" });
+          toast("Payment reference is now the name and the month, e.g. \"Meghan 2608\".", "success");
+          (ctx && ctx.refresh ? ctx.refresh() : refresh());
+        } catch (err) { toast(err.message || "Could not save.", "error"); }
+      } }),
+      el("p", { class: "help", text: "Sets the reference to the parent's name followed by the invoice month (YYMM), e.g. \"Meghan 2608\"." }),
+    ]),
+    invoicingCard.lastElementChild,
+  );
+  box.appendChild(invoicingCard);
 
   box.appendChild(group("Appearance", [
     ["invoice_title", "Invoice title"],
