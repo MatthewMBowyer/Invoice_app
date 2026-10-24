@@ -48,16 +48,54 @@ export function errorMessage(err) {
   return err && err.message ? err.message : "Something went wrong.";
 }
 
-function header(root) {
+// Sign-in progress. While a sign-in is in flight no sign-in control may be on
+// screen: the Google popup can take seconds to appear and the Drive read takes
+// longer still, so a live button invites a second tap that opens a second popup
+// competing with the first. This is scoped to sign-in only - ordinary screens
+// keep their header button.
+let signInBusy = false;
+let signInMessage = "";
+
+function setSigningIn(busy, message = "") {
+  signInBusy = busy;
+  signInMessage = message;
+  // Never clobber a working screen; the gate is only re-rendered while the app
+  // is still unready, which is exactly when the gate is what is on screen.
+  if (!state.ready) gateView(document.getElementById("app"));
+}
+
+/**
+ * Clear the in-flight flags WITHOUT re-rendering, for the moment a sign-in has
+ * succeeded and a real screen has taken over. Without this the flags would stay
+ * set and the next visit to the gate would show a spinner for ever.
+ */
+function finishSigningIn() {
+  signInBusy = false;
+  signInMessage = "";
+}
+
+function waitingBlock(message, help) {
+  return [
+    el("div", { class: "waiting", role: "status", "aria-live": "polite", "aria-busy": "true" }, [
+      el("span", { class: "spinner", "aria-hidden": "true" }),
+      el("p", { class: "waiting-label", text: message }),
+    ]),
+    help ? el("p", { class: "help", text: help }) : null,
+  ];
+}
+
+function header(root, { waiting = false } = {}) {
   const logo = el("img", {
     src: "assets/img/CTT_logo_cropped.png",
     alt: "Chloe's Travelling Tutors",
     class: "brand-logo",
   });
   const right = el("div", { class: "header-right" }, [
-    state.user
-      ? el("button", { class: "btn small secondary", text: "Sign out", onClick: doSignOut })
-      : el("button", { class: "btn small primary", id: "signin-btn", text: "Sign in with Google", onClick: doSignIn }),
+    waiting
+      ? el("span", { class: "header-waiting", text: "Signing in\u2026" })
+      : state.user
+        ? el("button", { class: "btn small secondary", text: "Sign out", onClick: doSignOut })
+        : el("button", { class: "btn small primary", id: "signin-btn", text: "Sign in with Google", onClick: doSignIn }),
   ]);
   return el("header", { class: "app-header" }, [
     el("div", { class: "header-inner" }, [logo, el("div", { class: "brand-text" }, [
@@ -69,7 +107,18 @@ function header(root) {
 
 function gateView(root) {
   clear(root);
-  root.appendChild(header(root));
+  // While a sign-in is in flight the gate shows progress INSTEAD of the button,
+  // so there is nothing to tap twice.
+  root.appendChild(header(root, { waiting: signInBusy }));
+  if (signInBusy) {
+    root.appendChild(el("main", { class: "app-main gate" }, [
+      el("div", { class: "gate-card" }, waitingBlock(
+        signInMessage || "Signing you in\u2026",
+        "This can take a few seconds while Google opens and your Drive is read.",
+      )),
+    ]));
+    return;
+  }
   root.appendChild(el("main", { class: "app-main gate" }, [
     el("div", { class: "gate-card" }, [
       el("h1", { text: "Invoices on the go" }),
@@ -122,26 +171,44 @@ async function renderRoute(root) {
 
 export function showExpired(root) {
   clear(root);
-  root.appendChild(header(root));
+  root.appendChild(header(root, { waiting: signInBusy }));
+  if (signInBusy) {
+    root.appendChild(el("main", { class: "app-main gate" }, [
+      el("div", { class: "gate-card" }, waitingBlock(
+        signInMessage || "Signing you in\u2026",
+        "This can take a few seconds while Google opens and your Drive is read.",
+      )),
+    ]));
+    return;
+  }
   root.appendChild(el("main", { class: "app-main gate" }, [
     el("div", { class: "gate-card" }, [
       el("h1", { text: "Your Google sign-in expired." }),
       el("p", { text: "Tap to sign in again." }),
-      el("button", { class: "btn primary large", text: "Sign in with Google", onClick: signInThenLoad }),
+      el("button", { class: "btn primary large", id: "signin-cta", text: "Sign in with Google", onClick: doSignIn }),
     ]),
   ]));
 }
 
 async function doSignIn() {
+  if (signInBusy) return;
+  setSigningIn(true, "Opening Google sign-in\u2026");
   try {
     await signInThenLoad();
   } catch (err) {
+    // A refused or failed sign-in returns the owner to a usable gate rather than
+    // leaving them on a spinner that never resolves.
+    setSigningIn(false);
     toast(errorMessage(err), "error");
   }
 }
 
 async function signInThenLoad() {
+  setSigningIn(true, "Opening Google sign-in\u2026");
   await auth.requestSignIn();
+  // The Google popup has closed and we hold a token; the Drive read is the slow
+  // part now, so say so instead of leaving a stale "opening" label up.
+  setSigningIn(true, "Signed in. Opening your Google Drive\u2026");
   await loadData();
 }
 
@@ -163,6 +230,9 @@ async function loadData() {
   await state.store.reload();
   state.user = auth.getUser();
   state.ready = true;
+  // The gate is no longer on screen; drop the in-flight flags so a later sign-out
+  // returns to a real button rather than an eternal spinner.
+  finishSigningIn();
   renderRoute(root);
 }
 
@@ -175,19 +245,18 @@ function boot() {
   }
   // No token in memory yet, but the browser may still hold a Google session and
   // an earlier consent. Asking GIS silently first is what turns "sign in again
-  // every visit" into "it just opens". While that is in flight the user sees the
-  // ordinary loading line rather than the sign-in card, so an account that can
-  // sign in silently never flashes a login screen at all.
+  // every visit" into "it just opens". While that is in flight the user sees a
+  // progress card with NO sign-in button, so an account that can sign in
+  // silently never flashes a login screen at all.
   const remembered = rememberedEmail();
-  root.appendChild(header(root));
-  root.appendChild(el("main", { class: "app-main" }, [
-    el("div", { class: "loading", text: remembered ? `Signing in as ${remembered}\u2026` : "Loading\u2026" }),
-  ]));
+  setSigningIn(true, remembered ? `Signing in as ${remembered}\u2026` : "Signing you in\u2026");
   auth.trySilentSignIn().then((ok) => {
     if (ok) {
-      loadData().catch((err) => { toast(errorMessage(err), "error"); gateView(root); });
+      setSigningIn(true, "Signed in. Opening your Google Drive\u2026");
+      loadData().catch((err) => { setSigningIn(false); toast(errorMessage(err), "error"); gateView(root); });
       return;
     }
+    setSigningIn(false);
     gateView(root);
   });
 }

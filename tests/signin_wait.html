@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<!-- TEST-ONLY driver for the sign-in waiting state. Not part of the shipped app.
+     Installs a controllable Google Identity Services stub BEFORE the app module
+     runs, then boots the REAL app shell and inspects the REAL DOM. The question
+     it answers: while a sign-in is in flight, can the owner see or tap a second
+     sign-in control? -->
+<html lang="en">
+<head><meta charset="utf-8" /><link rel="stylesheet" href="../assets/css/app.css" /></head>
+<body>
+  <div id="app"></div>
+  <pre id="out">pending</pre>
+
+  <script>
+    // A GIS stand-in whose token response is released only when the test says so.
+    // It records every requestAccessToken call so the test can count popups.
+    window.__gisCalls = [];
+    window.__pending = null;
+    window.__release = function (fail) {
+      var p = window.__pending;
+      if (!p) return false;
+      window.__pending = null;
+      if (fail) { if (p.error) p.error(); return true; }
+      if (p.callback) p.callback({ access_token: "test-token", expires_in: 3600 });
+      return true;
+    };
+    window.google = { accounts: { oauth2: {
+      initTokenClient: function (cfg) {
+        return {
+          requestAccessToken: function (opts) {
+            window.__gisCalls.push(opts || {});
+            window.__pending = { callback: cfg.callback, error: cfg.error_callback };
+          },
+        };
+      },
+      revoke: function () {},
+    } } };
+  </script>
+
+  <script type="module">
+    const lines = [];
+    let pass = 0, fail = 0;
+    const ok = (name, cond, detail = "") => {
+      if (cond) { pass++; lines.push("ok   " + name); }
+      else { fail++; lines.push("FAIL " + name + " " + detail); }
+    };
+    const tick = (ms = 60) => new Promise((r) => setTimeout(r, ms));
+    const app = () => document.getElementById("app");
+    const q = (sel) => app().querySelector(sel);
+    const qa = (sel) => [...app().querySelectorAll(sel)];
+    const btn = (id) => app().querySelector("#" + id);
+    const anyText = (t) => [...app().querySelectorAll("button,p,span,h1,h2,h3")]
+      .some((n) => (n.textContent || "").trim().includes(t));
+
+    // Importing the app module runs its boot(), which starts a silent sign-in
+    // against the stub. Nothing is released yet, so the app is mid-wait.
+    await import("../assets/js/app.js");
+    await tick();
+
+    lines.push("-- while the silent sign-in is in flight --");
+    ok("a sign-in request was actually made", window.__gisCalls.length === 1, String(window.__gisCalls.length));
+    ok("the silent request asked for no interaction",
+      window.__gisCalls[0] && window.__gisCalls[0].prompt === "", JSON.stringify(window.__gisCalls[0]));
+    ok("a spinner is on screen", Boolean(q(".spinner")));
+    ok("the spinner is announced to a screen reader",
+      Boolean(q('[role="status"][aria-busy="true"]')));
+    ok("the gate says what it is waiting for",
+      anyText("Sign") || anyText("sign"), app().textContent);
+    ok("NO gate sign-in button to tap twice", !btn("signin-cta"));
+    ok("NO header sign-in button to tap twice", !btn("signin-btn"));
+    ok("no sign-in button anywhere on the page",
+      qa("button").every((b) => !(b.textContent || "").includes("Sign in")),
+      qa("button").map((b) => b.textContent).join(" | "));
+    ok("the header shows progress instead of a button", Boolean(q(".header-waiting")));
+    ok("the brand still renders while waiting", Boolean(q(".brand-logo")));
+
+    lines.push("-- a refused silent sign-in returns a usable gate --");
+    window.__release(true);
+    await tick(120);
+    ok("the gate offers sign-in again", Boolean(btn("signin-cta")));
+    ok("the spinner is gone", !q(".spinner"));
+    ok("the header button is back", Boolean(btn("signin-btn")));
+
+    lines.push("-- tapping sign in shows progress, not a dead button --");
+    btn("signin-cta").click();
+    await tick(120);
+    ok("a second sign-in request was made", window.__gisCalls.length === 2, String(window.__gisCalls.length));
+    ok("the spinner is back while the popup is open", Boolean(q(".spinner")));
+    ok("the gate button is gone again", !btn("signin-cta"));
+    ok("the header button is gone again", !btn("signin-btn"));
+    ok("the label says Google is opening", anyText("Opening Google") || anyText("Google"),
+      app().textContent);
+
+    lines.push("-- a token arrives: the label moves on to Drive --");
+    // Hold the Drive read open so the checking window is deterministic instead
+    // of racing a failure that this page cannot avoid (there is no real backend).
+    let failDrive;
+    const driveGate = new Promise((_, reject) => { failDrive = reject; });
+    const realFetch = window.fetch;
+    window.fetch = () => driveGate;
+    window.__release(false);
+    await tick(120);
+    ok("it now says the Drive is opening", anyText("Opening your Google Drive") || anyText("Drive"),
+      app().textContent);
+    ok("still no sign-in button to double-tap", !btn("signin-cta") && !btn("signin-btn"));
+    ok("the spinner is still showing during the Drive read", Boolean(q(".spinner")));
+
+    // The Drive read cannot succeed here: this page has no real Google backend.
+    // What matters is that the failure surfaces as a usable gate, not a spinner
+    // that never resolves.
+    lines.push("-- a failed Drive read does not strand the owner --");
+    window.fetch = realFetch;
+    failDrive(new Error("Simulated Drive failure"));
+    await tick(300);
+    ok("the owner is not left on a permanent spinner", !q(".spinner") || Boolean(btn("signin-cta")),
+      app().textContent);
+    ok("something explains the failure", Boolean(q(".toast")) || anyText("Google") || anyText("wrong"),
+      app().textContent);
+
+    lines.push("");
+    lines.push(`SIGNIN_WAIT checks: ${pass} passed, ${fail} failed`);
+    lines.push(fail === 0 ? "SIGNIN_WAIT: PASS" : "SIGNIN_WAIT: FAIL");
+    document.getElementById("out").textContent = lines.join("\n");
+  </script>
+</body>
+</html>
