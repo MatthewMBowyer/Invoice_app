@@ -236,6 +236,50 @@
         ok("the repair leaves the total alone", Number(fixed.total_cents) === 112000, String(fixed.total_cents));
 
         // ===================================================================
+        // 0. A comma works as the decimal separator on the real invoice screen
+        // ===================================================================
+        // The defect this guards: typing "6,5" hours silently produced 65 hours,
+        // because "," was stripped as noise. The owner types on a South African
+        // keyboard where "," is the decimal key, so this must work end to end on
+        // the screen they actually use, not just in the parser.
+        lines.push("-- a comma works as the decimal point on the real screen --");
+        state.store = store;
+        localStorage.clear();
+        const commaMain = await render(renderInvoiceNew);
+        await pickParent(commaMain, "Example Parent");
+        await next(commaMain);
+        typeIn(byLabel(commaMain, "Rate for line 1"), "280,00");
+        typeIn(byLabel(commaMain, "Hours for line 1"), "2,5");
+        await tick();
+        ok("2,5 hours at R280,00 shows R700.00 on the line",
+          text(commaMain.querySelector(".line-total")).includes("700.00"),
+          text(commaMain.querySelector(".line-total")));
+        ok("the grand total reads R700.00",
+          text(commaMain.querySelector(".grand-total")).includes("700.00"),
+          text(commaMain.querySelector(".grand-total")));
+        ok("a comma value is accepted, not silently dropped",
+          !text(commaMain).includes("enter a rate") && !text(commaMain).includes("\u2014"),
+          text(commaMain).slice(0, 200));
+
+        // A dot must keep working for anyone who types it that way.
+        typeIn(byLabel(commaMain, "Hours for line 1"), "2.5");
+        await tick();
+        ok("a dot still gives the same R700.00",
+          text(commaMain.querySelector(".line-total")).includes("700.00"),
+          text(commaMain.querySelector(".line-total")));
+
+        // A full amount typed with a comma, in flat mode.
+        const flatToggle = byLabel(commaMain, "Charge one total for line 1");
+        flatToggle.checked = true;
+        flatToggle.dispatchEvent(new Event("change", { bubbles: true }));
+        await tick();
+        typeIn(byLabel(commaMain, "Full amount for line 1"), "1 500,50");
+        await tick();
+        ok("a flat amount of '1 500,50' reads as R1,500.50",
+          text(commaMain.querySelector(".line-total")).includes("1,500.50"),
+          text(commaMain.querySelector(".line-total")));
+
+        // ===================================================================
         // 1. No '#ERROR!' reaches the screen
         // ===================================================================
         lines.push("-- a stored Sheets error literal is never rendered --");

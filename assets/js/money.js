@@ -28,8 +28,87 @@ export function roundHalfUp(numerator, denominator) {
 }
 
 // Python's _MONEY_CLEAN / _HOURS_CLEAN both strip everything except digits,
-// dot and minus.
-const CLEAN = /[^0-9.\-]/g;
+// dot and minus. Commas are kept here because they are a decimal separator in
+// the locale this app is typed in, not noise - see splitNumberText.
+const CLEAN = /[^0-9.,\-]/g;
+
+/**
+ * Split typed text into sign, whole and fraction parts, accepting "." or ","
+ * as the decimal separator.
+ *
+ * A South African keyboard puts "," on the decimal key, so treating "," as
+ * noise silently turned "6,5" hours into 65 hours. Rules, chosen to keep the
+ * Python reference implementation's behaviour wherever the two overlap:
+ *
+ *   * A dot is always the decimal point ("12.345" is twelve point three four
+ *     five, truncated to the cent, exactly as the Python app reads it).
+ *   * When both separators appear, the LAST one is the decimal point and the
+ *     other is grouping, so "1,234.56" and "1 234,56" both read correctly.
+ *   * A lone comma is ambiguous. "150,50" is clearly a decimal. "1,500" could
+ *     be fifteen hundred, so the caller's domain decides via
+ *     groupingThreeIsThousands: money reads it as one thousand five hundred,
+ *     hours as one and a half (nobody tutors fifteen hundred hours).
+ *
+ * Returns null when the text cannot be read as a number.
+ */
+function splitNumberText(value, { groupingThreeIsThousands = false } = {}) {
+  let text = String(value).trim();
+  text = text.replace(CLEAN, "");
+  if (text === "" || text === "-" || text === "." || text === ",") return null;
+  const neg = text.startsWith("-");
+  text = text.replace(/^-+/, "");
+  if (text.includes("-")) return null;
+
+  const commas = (text.match(/,/g) || []).length;
+  const dots = (text.match(/\./g) || []).length;
+
+  let whole = text;
+  let frac = "";
+  if (commas > 0 || dots > 0) {
+    // Pick the decimal separator, then require every other separator to be
+    // grouping. Several dots ("1.2.3") cannot be grouping, so they stay invalid.
+    let dec = "";
+    if (commas > 0 && dots > 0) {
+      dec = text.lastIndexOf(",") > text.lastIndexOf(".") ? "," : ".";
+    } else if (dots > 0) {
+      if (dots > 1) return null;
+      dec = ".";
+    } else {
+      const after = text.slice(text.lastIndexOf(",") + 1);
+      const asGrouping = groupingThreeIsThousands && /^[0-9]{3}$/.test(after);
+      if (commas > 1 && !asGrouping) return null;
+      dec = asGrouping ? "" : ",";
+    }
+
+    const idx = dec === "" ? -1 : text.lastIndexOf(dec);
+    if (idx === -1) {
+      const groups = text.split(",");
+      if (!groups.every((g, i) => (i === 0 ? /^[0-9]{1,3}$/.test(g) : /^[0-9]{3}$/.test(g)))) {
+        return null;
+      }
+      whole = groups.join("");
+    } else {
+      const before = text.slice(0, idx);
+      const after = text.slice(idx + 1);
+      if (after.includes(dec)) return null;      // 1.2.3 or 1,2,3
+      // Everything before the decimal point must be digits and well-formed
+      // grouping separators.
+      const groupChar = dec === "." ? "," : ".";
+      const groups = before.split(groupChar);
+      if (before.includes(groupChar)) {
+        if (!groups.every((g, i) => (i === 0 ? /^[0-9]{1,3}$/.test(g) : /^[0-9]{3}$/.test(g)))) {
+          return null;
+        }
+      }
+      whole = groups.join("");
+      frac = after;
+    }
+  }
+
+  whole = whole || "0";
+  if (!/^[0-9]+$/.test(whole) || (frac !== "" && !/^[0-9]+$/.test(frac))) return null;
+  return { neg, whole, frac };
+}
 
 /** Parse user input such as "R240", "240.00" or 240 to integer cents. */
 export function parseMoneyToCents(value) {
@@ -38,28 +117,12 @@ export function parseMoneyToCents(value) {
     if (Number.isInteger(value)) return value * CENTS_PER_RAND;
     value = String(value); // shortest round-trip form, as Python's repr()
   }
-  let text = String(value).trim();
-  if (text === "") throw new MoneyError("amount is required");
-  text = text.replace(/,/g, "");
-  text = text.replace(CLEAN, "");
-  if (text === "" || text === "-" || text === ".") {
-    throw new MoneyError(`could not read amount from ${value}`);
-  }
-  const neg = text.startsWith("-");
-  text = text.replace(/^-+/, "");
-  if ((text.match(/\./g) || []).length > 1) {
-    throw new MoneyError(`could not read amount from ${value}`);
-  }
-  const dot = text.indexOf(".");
-  let whole = dot === -1 ? text : text.slice(0, dot);
-  let frac = dot === -1 ? "" : text.slice(dot + 1);
-  whole = whole || "0";
-  frac = (frac + "00").slice(0, 2);
-  if (!/^[0-9]+$/.test(whole) || !/^[0-9]+$/.test(frac)) {
-    throw new MoneyError(`could not read amount from ${value}`);
-  }
-  const cents = parseInt(whole, 10) * CENTS_PER_RAND + parseInt(frac, 10);
-  return neg ? -cents : cents;
+  if (String(value).trim() === "") throw new MoneyError("amount is required");
+  const parts = splitNumberText(value, { groupingThreeIsThousands: true });
+  if (!parts) throw new MoneyError(`could not read amount from ${value}`);
+  const frac = (parts.frac + "00").slice(0, 2);
+  const cents = parseInt(parts.whole, 10) * CENTS_PER_RAND + parseInt(frac, 10);
+  return parts.neg ? -cents : cents;
 }
 
 /** A currency symbol safe to print anywhere in the app. */
@@ -98,7 +161,7 @@ export function formatMoney(cents, currency = "ZAR", symbol = null) {
   return `${sign}${sym}${group3(whole)}.${String(frac).padStart(2, "0")}`;
 }
 
-/** Parse hours input ("6.5", "2.25", 1) to thousandths of an hour. */
+/** Parse hours input ("6.5", "6,5", "2.25", 1) to thousandths of an hour. */
 export function parseHoursToMilli(value) {
   if (value === null || value === undefined || String(value).trim() === "") {
     throw new MoneyError("hours are required");
@@ -107,25 +170,13 @@ export function parseHoursToMilli(value) {
     if (Number.isInteger(value)) return value * HOURS_SCALE;
     value = String(value);
   }
-  let text = String(value).trim().replace(CLEAN, "");
-  if (text === "" || text === "-" || text === ".") {
-    throw new MoneyError(`could not read hours from ${value}`);
-  }
-  const neg = text.startsWith("-");
-  text = text.replace(/^-+/, "");
-  if ((text.match(/\./g) || []).length > 1) {
-    throw new MoneyError(`could not read hours from ${value}`);
-  }
-  const dot = text.indexOf(".");
-  let whole = dot === -1 ? text : text.slice(0, dot);
-  let frac = dot === -1 ? "" : text.slice(dot + 1);
-  whole = whole || "0";
-  frac = (frac + "000").slice(0, 3);
-  if (!/^[0-9]+$/.test(whole) || !/^[0-9]+$/.test(frac)) {
-    throw new MoneyError(`could not read hours from ${value}`);
-  }
-  const milli = parseInt(whole, 10) * HOURS_SCALE + parseInt(frac, 10);
-  return neg ? -milli : milli;
+  // Hours never carry thousands grouping in this app, so "1,500" means an hour
+  // and a half rather than fifteen hundred hours.
+  const parts = splitNumberText(value, { groupingThreeIsThousands: false });
+  if (!parts) throw new MoneyError(`could not read hours from ${value}`);
+  const frac = (parts.frac + "000").slice(0, 3);
+  const milli = parseInt(parts.whole, 10) * HOURS_SCALE + parseInt(frac, 10);
+  return parts.neg ? -milli : milli;
 }
 
 /** Thousandths of an hour without trailing zeros: 6500 -> "6.5". */

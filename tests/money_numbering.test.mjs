@@ -50,6 +50,37 @@ try { M.parseHoursToMilli("1.2.3"); } catch (e) { threw = true; }
 check("malformed hours rejected", threw);
 
 // ---------------------------------------------------------------------------
+section("comma or dot both work as the decimal separator");
+// The defect this guards: "," was stripped as noise, so "6,5" hours silently
+// became 65 hours instead of six and a half. A South African keyboard puts ","
+// on the decimal key, so both must be accepted when typing hours and amounts.
+eq("hours 6,5 is six and a half", M.parseHoursToMilli("6,5"), 6500);
+eq("hours 6,5 formats back as 6.5", M.formatHours(M.parseHoursToMilli("6,5")), "6.5");
+eq("hours dot still works", M.parseHoursToMilli("6.5"), 6500);
+eq("hours 2,25", M.parseHoursToMilli("2,25"), 2250);
+eq("hours 0,5", M.parseHoursToMilli("0,5"), 500);
+eq("amount 150,50", M.parseMoneyToCents("150,50"), 15050);
+eq("amount 1 500,50", M.parseMoneyToCents("R1 500,50"), 150050);
+eq("amount 1 234,56", M.parseMoneyToCents("1 234,56"), 123456);
+eq("amount dot still works", M.parseMoneyToCents("150.50"), 15050);
+eq("amount 1,234.56 still grouping", M.parseMoneyToCents("1,234.56"), 123456);
+eq("amount 1,234,567.89 still grouping", M.parseMoneyToCents("1,234,567.89"), 123456789);
+eq("amount 1,500 reads as fifteen hundred", M.parseMoneyToCents("1,500"), 150000);
+eq("hours 1,500 reads as one and a half", M.parseHoursToMilli("1,500"), 1500);
+eq("a dot is always the decimal point", M.parseMoneyToCents("1.500"), 150);
+check("commas cannot double as two decimal points",
+  (() => { try { M.parseMoneyToCents("1,2,3"); return false; } catch (e) { return true; } })());
+check("a malformed comma group is still rejected",
+  (() => { try { M.parseMoneyToCents("1,23,456.78"); return false; } catch (e) { return true; } })());
+check("hours typed with a stray minus are rejected",
+  (() => { try { M.parseHoursToMilli("6-5"); return false; } catch (e) { return true; } })());
+
+// The end-to-end consequence for an invoice: 2,5 hours at R280,00 is R700,00,
+// which is what the owner sees when they use commas on the real screen.
+eq("2,5 hours at R280,00 is R700,00",
+  M.lineAmountCents(M.parseMoneyToCents("280,00"), M.parseHoursToMilli("2,5")), 70000);
+
+// ---------------------------------------------------------------------------
 section("reference-separator rule (INV-06)");
 eq("blank learner stripped with separator",
   I.paymentReference({ snap_payment_reference_template: "{parent_name} - {learner_name}", snap_parent_name: "Test Parent", snap_learner_name: "", number_text: "1", total_cents: 0 }),
