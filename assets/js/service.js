@@ -7,7 +7,7 @@ import * as M from "./money.js";
 import * as INV from "./invoicing.js";
 import {
   StoreError, COLUMNS, DEFAULT_SETTINGS, objectsToValues, encodeInvoice,
-  encodeLine, asInt, asBool, nowIso,
+  encodeLine, asInt, asBool, nowIso, cleanCell,
 } from "./store.js";
 
 export class ValidationError extends Error {
@@ -19,37 +19,49 @@ export class ValidationError extends Error {
   }
 }
 
-/** The values frozen onto the invoice at generation time. */
+/** The values frozen onto the invoice at generation time.
+ *
+ * Every value passes through cleanCell, so a parent, learner or setting whose
+ * cell was poisoned by a spreadsheet error literal is frozen as blank rather
+ * than as "#ERROR!" - the invoice then simply omits the row. The WhatsApp number
+ * is where this actually bit: a number typed as "+27..." was interpreted as a
+ * formula by the old non-RAW write, so the snapshot held the error and the
+ * invoice printed it in place of the number.
+ */
 export function snapshotFields(settings, parent, learner) {
   const s = settings || {};
   const p = parent || {};
   const l = learner || {};
   const full = (o) => `${o.name || ""} ${o.surname || ""}`.trim();
+  const cell = (value) => {
+    const cleaned = cleanCell(value);
+    return cleaned === null || cleaned === undefined ? "" : String(cleaned);
+  };
   return {
-    snap_parent_name: full(p),
-    snap_parent_whatsapp: p.whatsapp || "",
-    snap_parent_email: p.email || "",
-    snap_learner_name: full(l),
-    snap_school_level: l.school_level || "",
-    snap_business_name: s.business_name || "",
-    snap_business_address: s.business_address || "",
-    snap_business_phone: s.business_phone || "",
-    snap_business_email: s.business_email || "",
-    snap_bank_account_holder: s.account_holder || "",
-    snap_bank_account_type: s.account_type || "",
-    snap_bank_name: s.bank_name || "",
-    snap_bank_branch_code: s.branch_code || "",
-    snap_bank_account_number: s.account_number || "",
-    snap_bank_swift: s.swift_bic || "",
-    snap_payment_reference_template: s.payment_reference_template || "",
-    snap_payment_terms: s.payment_terms || "",
-    snap_whatsapp_template: s.whatsapp_template || "",
-    snap_invoice_footer: s.invoice_footer || "",
-    snap_terms_extra: s.terms_extra || "",
-    snap_accent_colour: s.accent_colour || "",
-    snap_currency_symbol: s.currency_symbol || "",
-    snap_invoice_title: s.invoice_title || "",
-    snap_pdf_footer_note: s.pdf_footer_note || "",
+    snap_parent_name: cell(full(p)),
+    snap_parent_whatsapp: cell(p.whatsapp),
+    snap_parent_email: cell(p.email),
+    snap_learner_name: cell(full(l)),
+    snap_school_level: cell(l.school_level),
+    snap_business_name: cell(s.business_name),
+    snap_business_address: cell(s.business_address),
+    snap_business_phone: cell(s.business_phone),
+    snap_business_email: cell(s.business_email),
+    snap_bank_account_holder: cell(s.account_holder),
+    snap_bank_account_type: cell(s.account_type),
+    snap_bank_name: cell(s.bank_name),
+    snap_bank_branch_code: cell(s.branch_code),
+    snap_bank_account_number: cell(s.account_number),
+    snap_bank_swift: cell(s.swift_bic),
+    snap_payment_reference_template: cell(s.payment_reference_template),
+    snap_payment_terms: cell(s.payment_terms),
+    snap_whatsapp_template: cell(s.whatsapp_template),
+    snap_invoice_footer: cell(s.invoice_footer),
+    snap_terms_extra: cell(s.terms_extra),
+    snap_accent_colour: cell(s.accent_colour),
+    snap_currency_symbol: cell(s.currency_symbol),
+    snap_invoice_title: cell(s.invoice_title),
+    snap_pdf_footer_note: cell(s.pdf_footer_note),
   };
 }
 

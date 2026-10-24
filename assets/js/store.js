@@ -67,6 +67,11 @@ export const COLUMNS = {
     "rate_cents", "hours_milli", "amount_cents", "is_flat", "sort_order"],
 };
 
+/** The template this app shipped with before name + YYMM. Recognised so an
+ * install that never chose one is moved to the current default; anything else is
+ * treated as a deliberate choice and never rewritten. */
+export const LEGACY_DEFAULT_REFERENCE = "{parent_name} - {learner_name}";
+
 export const DEFAULT_SETTINGS = {
   business_name: "Chloe's Travelling Tutors",
   business_address: "",
@@ -79,7 +84,7 @@ export const DEFAULT_SETTINGS = {
   branch_code: "",
   account_number: "",
   swift_bic: "",
-  payment_reference_template: "{parent_name} - {learner_name}",
+  payment_reference_template: "{parent_name} {yymm}",
   payment_terms: "",
   due_date_period_days: "7",
   currency: "ZAR",
@@ -465,6 +470,14 @@ export class Store {
     }
     this.settings = obj;
     this._settingsPresent = values.length > 1;
+    // An install that has never chosen a reference template carries the old
+    // name-and-learner default. It is upgraded to name + YYMM, because that is
+    // the reference the owner actually reconciles against a bank statement with
+    // ("Meghan 2608"), and a stored default is indistinguishable from a chosen
+    // one. A template the owner typed is left exactly as it is.
+    if (String(obj.payment_reference_template || "").trim() === LEGACY_DEFAULT_REFERENCE) {
+      obj.payment_reference_template = DEFAULT_SETTINGS.payment_reference_template;
+    }
     void header;
   }
 

@@ -220,7 +220,7 @@ export function discountLabel(type, value, { symbol = null, currency = "ZAR" } =
 
 /** Render the payment reference template with the invoice's variables. */
 export function paymentReference(invoice, { totalCents = null } = {}) {
-  const template = invoice.snap_payment_reference_template || "{parent_name} - {learner_name}";
+  const template = invoice.snap_payment_reference_template || "{parent_name} {yymm}";
   const symbol = invoice.snap_currency_symbol !== null && invoice.snap_currency_symbol !== undefined
     && invoice.snap_currency_symbol !== "" ? invoice.snap_currency_symbol : null;
   const total = totalCents !== null && totalCents !== undefined

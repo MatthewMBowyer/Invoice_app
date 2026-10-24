@@ -41,6 +41,20 @@ const corpus = {
     [100, 5], [19999, 1001], [24000, 0],
   ],
   sanitise_symbol: ["R", "", "R$", "USD", "€", "<b>", "toolong", null, "R &", "'"],
+  discount: [
+    [206000, "none", ""], [206000, "percent", "10"], [206000, "percent", " 10.5 "],
+    [206000, "amount", "150"], [206000, "amount", "R150.00"], [206000, "percent", "0"],
+    [206000, "percent", "-5"], [206000, "amount", "-5"], [206000, "percent", "abc"],
+    [206000, "amount", ""], [206000, "bogus", "10"], [0, "percent", "10"],
+    [206000, "percent", "150"], [206000, "amount", "999999"],
+    [1, "percent", "50"], [333, "percent", "33.33"], [206000, "PERCENT", "10"],
+    [206000, "percent", "100"], [12345, "percent", "7.5"],
+  ],
+  discount_label: [
+    ["percent", "10"], ["percent", "10.5"], ["percent", ""], ["percent", "abc"],
+    ["amount", "150"], ["amount", "abc"], ["amount", ""], ["none", "10"],
+    ["percent", "0"], ["percent", "-5"], ["amount", "R150.00"],
+  ],
   reference: [
     { snap_payment_reference_template: "{parent_name} - {learner_name}", snap_parent_name: "Tarryn Fourie", snap_learner_name: "Learner A", number_text: "643", _total: 156000 },
     { snap_payment_reference_template: "{parent_name} - {learner_name}", snap_parent_name: "Test Parent", snap_learner_name: "", number_text: "644", _total: 96000 },
@@ -50,6 +64,12 @@ const corpus = {
     { snap_payment_reference_template: "{parent_name}/{learner_name}", snap_parent_name: "X", snap_learner_name: "Y", number_text: "2", _total: 100 },
     { snap_payment_reference_template: "{parent_name} / {learner_name}", snap_parent_name: "X", snap_learner_name: "", number_text: "2", _total: 100 },
     { snap_payment_reference_template: "{unknown} {parent_name}", snap_parent_name: "Z", snap_learner_name: "", number_text: "3", _total: 0 },
+    // {yymm} is the shipped default. It must read the invoice's own date in both
+    // twins, so a month-end invoice re-rendered later keeps the same reference.
+    { snap_payment_reference_template: "{parent_name} {yymm}", snap_parent_name: "Meghan", snap_learner_name: "", number_text: "1", invoice_date: "2026-08-07", _total: 206000 },
+    { snap_payment_reference_template: "{parent_name} {yymm}", snap_parent_name: "Meghan", snap_learner_name: "", number_text: "2", invoice_date: "2026-01-31", _total: 100 },
+    { snap_payment_reference_template: "{parent_name} {yymm}", snap_parent_name: "Meghan", snap_learner_name: "", number_text: "3", invoice_date: "2005-03-09", _total: 0 },
+    { snap_payment_reference_template: "{yymm}-{invoice_number}", snap_parent_name: "Ann", snap_learner_name: "", number_text: "A7", invoice_date: "2026-12-01", _total: 5000 },
   ],
   filename: [
     // These cases supply an explicit business name. The two languages fall back
@@ -124,6 +144,8 @@ const js = {
   parse_hours: corpus.parse_hours.map((v) => safe(() => M.parseHoursToMilli(v))),
   format_hours: corpus.format_hours.map((h) => M.formatHours(h)),
   line_amount: corpus.line_amount.map(([r, h]) => M.lineAmountCents(r, h)),
+  discount_cents: corpus.discount.map(([s, kind, value]) => I.discountCents(s, kind, value)),
+  discount_label: corpus.discount_label.map(([kind, value]) => I.discountLabel(kind, value)),
   sanitise_symbol: corpus.sanitise_symbol.map((v) => M.sanitiseSymbol(v)),
   reference: corpus.reference.map((inv) => {
     const clean = Object.assign({}, inv);

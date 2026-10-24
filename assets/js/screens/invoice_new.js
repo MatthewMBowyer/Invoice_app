@@ -56,6 +56,7 @@ export async function renderInvoiceNew(main) {
     step: (saved && saved.step) || 1,
     parentId: (saved && saved.parentId) || null,
     parentQuery: (saved && saved.parentQuery) || "",
+    parentWhatsapp: (saved && saved.parentWhatsapp) || "",
     newParent: (saved && saved.newParent) || null,
     learnerId: (saved && saved.learnerId) || null,
     remember: saved ? saved.remember !== false : true,
@@ -69,6 +70,11 @@ export async function renderInvoiceNew(main) {
   };
   let selectedParent = parents.find((p) => String(p.parent_id) === String(draft.parentId)) || null;
   if (!selectedParent) draft.parentId = null;
+  // A number typed on this screen but not yet generated is re-applied here, so
+  // stepping back and forth (or a re-render) does not silently discard it.
+  else if (draft.parentWhatsapp) {
+    selectedParent = Object.assign({}, selectedParent, { whatsapp: draft.parentWhatsapp });
+  }
   let newParent = draft.newParent;
   let learnerId = draft.learnerId;
   let remember = draft.remember;
@@ -82,6 +88,7 @@ export async function renderInvoiceNew(main) {
   function persist() {
     saveDraft({
       step: draft.step, parentId: draft.parentId, parentQuery: draft.parentQuery,
+      parentWhatsapp: draft.parentWhatsapp,
       newParent, learnerId, remember, invoiceDate: draft.invoiceDate,
       dueDate: draft.dueDate, rows: draft.rows,
       discountType: draft.discountType, discountValue: draft.discountValue,
@@ -145,6 +152,21 @@ export async function renderInvoiceNew(main) {
       mobileWrap.className = "hidden";
       if (selectedParent) {
         details.appendChild(el("p", { class: "picked", text: `Picked: ${selectedParent.name} ${selectedParent.surname}`.trim() }));
+        // A parent saved before their number was known keeps printing a blank
+        // WhatsApp row forever, because the invoice freezes the number it was
+        // given. This field edits the number on the invoice being made, so the
+        // missing one can be filled in without abandoning the invoice and going
+        // to the Parents screen first.
+        mobileWrap.className = "";
+        const mob = el("input", { type: "tel", placeholder: "0821234567", value: selectedParent.whatsapp || "" });
+        mob.addEventListener("input", () => {
+          selectedParent = Object.assign({}, selectedParent, { whatsapp: mob.value });
+          draft.parentWhatsapp = mob.value;
+          persist();
+        });
+        mobileWrap.appendChild(field("Mobile number", mob,
+          "Printed on the invoice and used for the WhatsApp link. Saved to this parent when you generate."));
+        details.appendChild(mobileWrap);
         const kids = store.learners.filter((l) => String(l.parent_id) === String(selectedParent.parent_id));
         if (kids.length) {
           const sel = el("select", { class: "child-picker", "aria-label": "Learner (optional)" });
@@ -161,6 +183,7 @@ export async function renderInvoiceNew(main) {
         const mob = el("input", { type: "tel", placeholder: "0821234567", value: newParent.whatsapp || "" });
         mob.addEventListener("input", () => { newParent.whatsapp = mob.value; persist(); });
         mobileWrap.appendChild(field("Mobile number", mob, "Needed so the invoice can be shared on WhatsApp later."));
+        details.appendChild(mobileWrap);
         details.appendChild(el("p", { class: "picked", text: `New parent: ${newParent.name}` }));
       }
     }
@@ -171,6 +194,7 @@ export async function renderInvoiceNew(main) {
       results.replaceChildren();
       selectedParent = null; newParent = null;
       draft.parentId = null;
+      draft.parentWhatsapp = "";
       if (q.trim()) {
         const matches = parentMatches(q);
         for (const p of matches) {
@@ -178,6 +202,7 @@ export async function renderInvoiceNew(main) {
             type: "button", class: "typeahead-item",
             onClick: () => {
               selectedParent = p; draft.parentId = p.parent_id;
+              draft.parentWhatsapp = "";
               input.value = `${p.name} ${p.surname}`.trim();
               draft.parentQuery = input.value;
               results.replaceChildren(); renderDetails();
@@ -533,7 +558,25 @@ export async function renderInvoiceNew(main) {
   }
 
   async function ensureParent() {
-    if (selectedParent) return selectedParent.parent_id;
+    if (selectedParent) {
+      // The mobile number may have been filled in on this screen, so it is
+      // written back before the invoice is made - the invoice freezes whatever
+      // the parent record holds, so saving after generation would be too late.
+      const typed = String(selectedParent.whatsapp || "").trim();
+      const original = String((parents.find((p) => String(p.parent_id) === String(selectedParent.parent_id)) || {}).whatsapp || "").trim();
+      if (typed !== original) {
+        const saved = await S.saveParent(store, {
+          parentId: selectedParent.parent_id,
+          name: selectedParent.name, surname: selectedParent.surname,
+          whatsapp: typed, email: selectedParent.email,
+          defaultRateCents: Number.isFinite(parseInt(selectedParent.default_rate_cents, 10))
+            ? parseInt(selectedParent.default_rate_cents, 10) : 0,
+        });
+        await store.reload();
+        selectedParent = store.parents.find((p) => String(p.parent_id) === String(saved.parent_id));
+      }
+      return selectedParent.parent_id;
+    }
     if (newParent) {
       const savedParent = await S.saveParent(store, { name: newParent.name, whatsapp: newParent.whatsapp || "" });
       await store.reload();
