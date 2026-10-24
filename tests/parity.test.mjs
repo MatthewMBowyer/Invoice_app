@@ -83,6 +83,15 @@ const corpus = {
     "0821234567", "082 123 4567", "+27821234567", "27821234567", "082-123-4567",
     "0027821234567", "082 123 4567 ", "(082) 123 4567", "0211234567", "12345",
     "", "abc", "2782123456", "082123456", "0721234567", "0621234567", "0921234567",
+    // The standard South African written form, where the "(0)" trunk prefix has
+    // to go once the country code is present or the link dials nobody.
+    "+27 (0)82 123 4567", "27 (0)82 123 4567", "+27 082 123 4567",
+    "0027 (0)82 123 4567", "(+27) 82 123 4567",
+    // A cell holding more than one number, or an extension.
+    "082 123 4567 or 083 765 4321", "082 123 4567/083 765 4321",
+    "0821234567 ext 21", "082 123 4567 (home)", "082.123.4567",
+    // Sheets scientific notation: the digits are already lost.
+    "8.21235E+08", "2.78212E+10",
   ],
   wa_link: [
     ["0821234567", "Hi there"],

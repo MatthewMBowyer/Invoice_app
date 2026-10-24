@@ -10,6 +10,7 @@ import { Store, MemoryBackend } from "../assets/js/store.js";
 import * as S from "../assets/js/service.js";
 import * as M from "../assets/js/money.js";
 import * as I from "../assets/js/invoicing.js";
+import * as W from "../assets/js/whatsapp.js";
 
 let passed = 0;
 let failed = 0;
@@ -79,6 +80,46 @@ check("hours typed with a stray minus are rejected",
 // which is what the owner sees when they use commas on the real screen.
 eq("2,5 hours at R280,00 is R700,00",
   M.lineAmountCents(M.parseMoneyToCents("280,00"), M.parseHoursToMilli("2,5")), 70000);
+
+// ---------------------------------------------------------------------------
+section("WhatsApp numbers normalise to a dialable 27XXXXXXXXX");
+// The defect this guards: "+27 (0)82 123 4567" - the standard South African
+// written form - produced 270821234567, which is not dialable, and the owner was
+// told their own number was invalid. A cell holding "082 ... or 083 ..." glued
+// both numbers together and dialled nobody.
+const sameNumber = "27821234567";
+for (const written of [
+  "0821234567", "082 123 4567", "+27821234567", "27821234567", "082-123-4567",
+  "0027821234567", "(082) 123 4567", "(+27) 82 123 4567", "082.123.4567",
+  "+27 (0)82 123 4567", "27 (0)82 123 4567", "+27 082 123 4567",
+  "0027 (0)82 123 4567", "082 123 4567 ",
+]) {
+  eq(`"${written}" normalises`, W.normaliseZaMobile(written), sameNumber);
+  check(`"${written}" is accepted`, W.isValidZaMobile(written));
+}
+// Someone who writes two numbers means either is fine; pick the reachable one.
+for (const written of [
+  "082 123 4567 or 083 765 4321", "082 123 4567/083 765 4321",
+  "0821234567 ext 21", "082 123 4567 (home)",
+]) {
+  eq(`"${written}" resolves to one dialable number`, W.normaliseZaMobile(written), sameNumber);
+}
+// A landline is a real contact detail but not a WhatsApp destination.
+check("a landline is not accepted as a WhatsApp number", !W.isValidZaMobile("021 123 4567"));
+eq("a landline still normalises for display", W.normaliseZaMobile("021 123 4567"), "27211234567");
+// The digits are already gone in scientific notation; guessing would dial a
+// stranger, so it is reported unreadable instead.
+eq("scientific notation is not guessed at", W.normaliseZaMobile("8.21235E+08"), "");
+check("scientific notation is rejected", !W.isValidZaMobile("8.21235E+08"));
+eq("an empty number is not invented", W.normaliseZaMobile(""), "");
+eq("nonsense is not invented", W.normaliseZaMobile("abc"), "");
+// The normalised number is what the wa.me link actually dials.
+const waPayload = W.invoiceSharePayload(
+  { snap_parent_whatsapp: "+27 (0)82 123 4567", snap_parent_name: "Test Parent", number_text: "1", snap_whatsapp_template: "Hi {parent_name}" },
+  { amountDisplay: "R700.00", dueDateDisplay: "1 Sep 2026" });
+check("a (0) number produces a working wa.me link",
+  Boolean(waPayload.url) && waPayload.url.includes("wa.me/27821234567"), String(waPayload.url));
+check("no problem is reported for a valid (0) number", waPayload.problem === null, String(waPayload.problem));
 
 // ---------------------------------------------------------------------------
 section("reference-separator rule (INV-06)");
