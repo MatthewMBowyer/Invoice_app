@@ -1,5 +1,57 @@
 // Small DOM helpers shared by every screen. No framework, no build step.
 
+/**
+ * A single in-flight counter behind the global progress bar.
+ *
+ * Every slow path in this app is a Google round trip, so counting them in one
+ * place means a wait can never be silent: if the app is talking to Google, the
+ * bar is moving. Individual screens still set their own busy labels for work
+ * that happens after the last response (PDF rendering), which is not network.
+ */
+let pendingWork = 0;
+let progressTimer = null;
+
+function progressNode() {
+  if (typeof document === "undefined" || !document.body) return null;
+  let node = document.getElementById("global-progress");
+  if (!node) {
+    node = el("div", { id: "global-progress", class: "global-progress", role: "progressbar",
+      "aria-label": "Working", "aria-hidden": "true" });
+    document.body.appendChild(node);
+  }
+  return node;
+}
+
+export function beginWork() {
+  pendingWork += 1;
+  const node = progressNode();
+  if (!node) return;
+  node.setAttribute("aria-hidden", "false");
+  node.classList.add("is-active");
+  // A request that finishes inside a few milliseconds should not flash the bar;
+  // only a wait the owner can actually perceive is worth announcing.
+  if (!progressTimer) {
+    progressTimer = setTimeout(() => { node.classList.add("is-visible"); }, 120);
+  }
+}
+
+export function endWork() {
+  pendingWork = Math.max(0, pendingWork - 1);
+  if (pendingWork > 0) return;
+  if (progressTimer) { clearTimeout(progressTimer); progressTimer = null; }
+  // Look up rather than create: if the bar was never shown there is nothing to
+  // clear, and a hidden node should not be left behind.
+  const node = typeof document === "undefined" ? null : document.getElementById("global-progress");
+  if (!node) return;
+  node.classList.remove("is-active", "is-visible");
+  node.setAttribute("aria-hidden", "true");
+}
+
+/** True while anything is in flight — used by tests. */
+export function isWorking() {
+  return pendingWork > 0;
+}
+
 export function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -158,12 +210,24 @@ export function viewDocument(bytes, filename, mime = "application/pdf") {
   const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
   const overlay = el("div", { class: "viewer-overlay", role: "dialog", "aria-label": filename });
   const frame = el("iframe", { class: "viewer-frame", src: url, title: filename });
+
+  // Until the frame paints, an empty white rectangle is indistinguishable from a
+  // PDF that failed to load. This says which it is.
+  const pending = el("div", { class: "viewer-pending" }, [
+    el("div", { class: "spinner" }),
+    el("p", { class: "waiting-label", text: "Opening the document\u2026" }),
+  ]);
+  const stage = el("div", { class: "viewer-stage" }, [frame, pending]);
+  frame.addEventListener("load", () => { pending.remove(); });
+  // A browser that cannot render PDF inline still fires "load" and shows blank
+  // space, so the bar always carries a way to get the file out.
   const bar = el("div", { class: "viewer-bar" }, [
     el("span", { class: "viewer-name", text: filename }),
+    el("button", { class: "btn secondary small", text: "Download", onClick: () => download(filename, bytes, mime) }),
     el("button", { class: "btn secondary small", text: "Close", onClick: () => close() }),
   ]);
   overlay.appendChild(bar);
-  overlay.appendChild(frame);
+  overlay.appendChild(stage);
   document.body.appendChild(overlay);
   document.body.classList.add("viewer-open");
   function close() {
@@ -173,6 +237,30 @@ export function viewDocument(bytes, filename, mime = "application/pdf") {
   }
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
   return close;
+}
+
+/**
+ * Run a slow action with the button visibly working.
+ *
+ * Generating a PDF takes long enough on a phone that an unchanged button reads
+ * as a dead tap, which is exactly how a working action gets reported as broken.
+ * The label change is the signal that the tap registered.
+ */
+export async function withBusy(button, label, action) {
+  if (!button || button.dataset.busy === "1") return undefined;
+  const original = button.textContent;
+  button.dataset.busy = "1";
+  button.disabled = true;
+  button.classList.add("is-busy");
+  button.textContent = label;
+  try {
+    return await action();
+  } finally {
+    delete button.dataset.busy;
+    button.disabled = false;
+    button.classList.remove("is-busy");
+    button.textContent = original;
+  }
 }
 
 export function canShareFile(bytes, filename, mime) {
@@ -192,6 +280,28 @@ export function canShareFile(bytes, filename, mime) {
 export async function shareFile(bytes, filename, mime, { title, text } = {}) {
   const file = new File([bytes], filename, { type: mime });
   await navigator.share({ files: [file], title, text });
+}
+
+/**
+ * Say what actually went wrong when the share sheet will not open.
+ *
+ * "Could not open the share sheet" on its own sends the owner looking for a bug
+ * in the app when the usual cause is the browser withholding the gesture or not
+ * supporting file sharing at all. Each case names the working alternative.
+ */
+export function shareFailureMessage(err) {
+  const name = String((err && err.name) || "");
+  if (name === "NotAllowedError") {
+    return "The browser blocked the share sheet. Open WhatsApp yourself and attach the PDF from Download PDF.";
+  }
+  if (name === "NotSupportedError" || name === "TypeError") {
+    return "This browser cannot share a file directly. Use Download PDF, then attach it in WhatsApp.";
+  }
+  if (name === "DataError") {
+    return "The PDF was empty, so there was nothing to share. Use Download PDF and check the file opens.";
+  }
+  const detail = err && err.message ? String(err.message) : "unknown error";
+  return `The share sheet failed (${detail}). Use Download PDF, then attach it in WhatsApp.`;
 }
 
 export function toCsv(rows, columns) {

@@ -2,7 +2,7 @@
 // status) and an invoice detail with status actions, duplicate, soft cancel,
 // PDF download and the WhatsApp deep link.
 
-import { el, field, toast, confirmDialog, download, emptyState, viewDocument, revealElement, headerOffset, canShareFile, shareFile } from "../ui.js";
+import { el, field, toast, confirmDialog, download, emptyState, viewDocument, revealElement, headerOffset, canShareFile, shareFile, shareFailureMessage, withBusy } from "../ui.js";
 import * as I from "../invoicing.js";
 import * as W from "../whatsapp.js";
 import * as S from "../service.js";
@@ -122,6 +122,14 @@ export async function renderInvoices(main, { refresh }) {
       return cachedBytes;
     }
 
+    // Rendered as soon as the invoice is opened, not when a button is tapped.
+    // navigator.share only works while the tap's transient activation is live,
+    // and awaiting the PDF build first spends it, which is why the share sheet
+    // refused to open. With the bytes already in hand the share call runs inside
+    // the tap itself. The rejection is kept for the button that needs it.
+    const bytesReady = pdfBytes();
+    bytesReady.catch(() => {});
+
     // An invoice generated before the banking details were entered keeps blank
     // payment lines forever, because the PDF prints the values frozen onto the
     // invoice. This offers the one-click repair, and only when it is needed.
@@ -145,17 +153,19 @@ export async function renderInvoices(main, { refresh }) {
       }
     }
 
-    actions.appendChild(el("button", { class: "btn primary small", text: "View invoice", onClick: async () => {
+    const viewBtn = el("button", { class: "btn primary small", text: "View invoice", onClick: () => withBusy(viewBtn, "Opening\u2026", async () => {
       try { viewDocument(await pdfBytes(), I.invoiceFilename(inv)); }
       catch (err) { toast(errorMessage(err), "error"); }
-    } }));
-    actions.appendChild(el("button", { class: "btn secondary small", text: "Download PDF", onClick: async () => {
+    }) });
+    const downloadBtn = el("button", { class: "btn secondary small", text: "Download PDF", onClick: () => withBusy(downloadBtn, "Preparing\u2026", async () => {
       try {
         const bytes = await pdfBytes();
         download(I.invoiceFilename(inv), bytes, "application/pdf");
         toast("PDF downloaded.", "success");
       } catch (err) { toast(errorMessage(err), "error"); }
-    } }));
+    }) });
+    actions.appendChild(viewBtn);
+    actions.appendChild(downloadBtn);
     detail.appendChild(actions);
 
     // WhatsApp share: the real wa.me link, copy button, and the honest note.
@@ -179,18 +189,28 @@ export async function renderInvoices(main, { refresh }) {
       // link carries text and nothing else. On a phone (Web Share level 2) this
       // hands WhatsApp the real file, so the parent receives the invoice itself.
       if (canAttachPdf) {
-        waActions.appendChild(el("button", { class: "btn primary small", text: "Share PDF on WhatsApp", onClick: async () => {
-          try {
-            const bytes = await pdfBytes();
-            await shareFile(bytes, I.invoiceFilename(inv), "application/pdf", {
+        // The share sheet only opens while the tap's transient activation is
+        // live, and awaiting the PDF build inside the tap spends it. So the
+        // button is held in a "preparing" state until the bytes are in memory,
+        // and the tap then calls share() with no await in front of it.
+        const shareBtn = el("button", { class: "btn primary small", text: "Preparing PDF\u2026", disabled: true,
+          onClick: () => {
+            if (!cachedBytes) return;
+            shareFile(cachedBytes, I.invoiceFilename(inv), "application/pdf", {
               title: `Invoice ${inv.number_text}`, text: share.message,
+            }).catch((err) => {
+              // Dismissing the share sheet is a normal action, not a failure.
+              if (err && (err.name === "AbortError" || /abort|cancel/i.test(String(err.message || "")))) return;
+              toast(shareFailureMessage(err), "error");
             });
-          } catch (err) {
-            // Dismissing the share sheet is a normal action, not a failure.
-            if (err && (err.name === "AbortError" || /abort|cancel/i.test(String(err.message || "")))) return;
-            toast("Could not open the share sheet. Use Download PDF, then attach it in WhatsApp.", "error");
-          }
-        } }));
+          } });
+        bytesReady.then(() => {
+          shareBtn.disabled = false;
+          shareBtn.textContent = "Share PDF on WhatsApp";
+        }).catch(() => {
+          shareBtn.textContent = "PDF could not be prepared";
+        });
+        waActions.appendChild(shareBtn);
       }
       wa.appendChild(waActions);
     }

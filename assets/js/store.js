@@ -14,6 +14,7 @@
 import { todayIso } from "./money.js";
 import { DEFAULT_TEMPLATE as WA_TEMPLATE } from "./whatsapp.js";
 import { normaliseDiscountType } from "./invoicing.js";
+import { beginWork, endWork } from "./ui.js";
 
 export const SPREADSHEET_TITLE = "Chloe Travelling Tutors Invoice Data";
 export const FILE_ID_STORAGE_KEY = "ctt_invoice_spreadsheet_id";
@@ -188,10 +189,15 @@ export class GoogleDriveBackend {
   async jsonFetch(url, options = {}) {
     const headers = Object.assign(await this.headers(), options.headers || {});
     let res;
+    // Every Google round trip is counted, so the global bar reflects real work
+    // rather than an estimate of it.
+    beginWork();
     try {
       res = await fetch(url, Object.assign({}, options, { headers }));
     } catch (err) {
       throw new StoreError("Could not reach Google Drive. Please try again.");
+    } finally {
+      endWork();
     }
     if (res.status === 401) {
       throw Object.assign(new Error("unauthorised"), { name: "AuthExpiredError" });

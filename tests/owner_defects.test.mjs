@@ -29,8 +29,18 @@ const { Auth, clearStoredSession } = await import("../assets/js/auth.js");
 
 let pass = 0;
 const fails = [];
+const pending = [];
 function check(name, fn) {
-  try { fn(); pass += 1; } catch (err) { fails.push(`${name}: ${err.message}`); }
+  try {
+    const out = fn();
+    // An async case must be awaited, or its rejection would go unhandled and the
+    // check would pass without ever running its assertions.
+    if (out && typeof out.then === "function") {
+      pending.push(out.then(() => { pass += 1; }, (err) => { fails.push(`${name}: ${err.message}`); }));
+      return;
+    }
+    pass += 1;
+  } catch (err) { fails.push(`${name}: ${err.message}`); }
 }
 
 // ---- 1. "#ERROR!" must never reach a snapshot ------------------------------
@@ -187,6 +197,103 @@ check("GIS arriving after construction is still usable", () => {
   delete globalThis.window;
 });
 
+// ---- 5. the share sheet must not spend the tap's activation ----------------
+// navigator.share only opens while the tap is still "active". Awaiting the PDF
+// build inside the handler spends that activation, which is exactly the reported
+// "Could not open the share sheet". So the share path must hand share() bytes it
+// already holds, with no await before the call.
+
+const ui = await import("../assets/js/ui.js");
+
+check("the share failure message names the working alternative", () => {
+  const blocked = ui.shareFailureMessage(Object.assign(new Error("x"), { name: "NotAllowedError" }));
+  assert.match(blocked, /Download PDF/);
+  const unsupported = ui.shareFailureMessage(Object.assign(new Error("x"), { name: "NotSupportedError" }));
+  assert.match(unsupported, /Download PDF/);
+  const other = ui.shareFailureMessage(new Error("boom"));
+  assert.match(other, /boom/);
+  assert.match(other, /Download PDF/);
+});
+
+check("shareFile passes the real bytes to navigator.share", async () => {
+  let seen = null;
+  globalThis.File = class { constructor(parts, name, opts) { this.parts = parts; this.name = name; this.type = opts.type; } };
+  // Node exposes navigator as a getter, so it has to be redefined, not assigned.
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { share: async (payload) => { seen = payload; }, canShare: () => true },
+  });
+  await ui.shareFile(new Uint8Array([1, 2, 3]), "inv.pdf", "application/pdf", { title: "t", text: "m" });
+  assert.equal(seen.files.length, 1);
+  assert.equal(seen.files[0].name, "inv.pdf");
+  assert.equal(seen.title, "t");
+});
+
+// ---- 6. every wait must be visible ----------------------------------------
+// The reported confusion: a slow PDF looked identical to a broken one. Work in
+// flight is counted centrally, so the bar is driven by real requests.
+// beginWork touches the DOM only to show the bar, so a minimal stub is enough
+// and the counter under test is the real one.
+const barClasses = new Set();
+let barHidden = "true";
+let barNode = null;
+function stubBar() {
+  const node = {
+    className: "", dataset: {}, style: {}, children: [],
+    classList: { add: (c) => barClasses.add(c), remove: (c) => barClasses.delete(c),
+      contains: (c) => barClasses.has(c) },
+    setAttribute: (k, v) => { if (k === "aria-hidden") barHidden = v; },
+    appendChild() {}, set textContent(v) { this._t = v; }, get textContent() { return this._t; },
+  };
+  return node;
+}
+globalThis.document = {
+  getElementById: (id) => (id === "global-progress" ? barNode : null),
+  createElement: () => stubBar(),
+  body: { appendChild: (n) => { barNode = n; }, classList: { add() {}, remove() {} } },
+};
+check("beginWork/endWork track overlapping work", () => {
+  barNode = null;
+  barClasses.clear();
+  assert.equal(ui.isWorking(), false);
+  ui.beginWork();
+  assert.equal(ui.isWorking(), true);
+  assert.ok(barClasses.has("is-active"), "the bar is active while work is in flight");
+  ui.beginWork();
+  assert.equal(ui.isWorking(), true);
+  ui.endWork();
+  assert.equal(ui.isWorking(), true, "one request still in flight");
+  assert.ok(barClasses.has("is-active"), "the bar stays active while work remains");
+  ui.endWork();
+  assert.equal(ui.isWorking(), false);
+  assert.equal(barHidden, "true", "the bar is hidden once the last request lands");
+  assert.ok(!barClasses.has("is-active"), "the bar stops animating when the work ends");
+});
+
+check("a stray endWork cannot drive the counter negative", () => {
+  ui.endWork();
+  ui.endWork();
+  assert.equal(ui.isWorking(), false);
+  ui.beginWork();
+  assert.equal(ui.isWorking(), true);
+  ui.endWork();
+});
+
+check("the source renders the PDF before the share button is tapped", async () => {
+  // Guards the ordering, which is what actually fixes the share sheet: if the
+  // build ever moves back inside the tap, activation is spent again.
+  const src = await import("node:fs").then((fs) => fs.readFileSync(new URL("../assets/js/screens/invoices.js", import.meta.url), "utf8"));
+  const prefetch = src.indexOf("const bytesReady = pdfBytes();");
+  const shareCall = src.indexOf("shareFile(cachedBytes");
+  assert.ok(prefetch > -1, "the invoice detail must start rendering on open");
+  assert.ok(shareCall > -1, "the share button must use already-rendered bytes");
+  assert.ok(prefetch < shareCall, "the render must start before the share handler");
+  // And the share handler must not await anything before calling share().
+  const handler = src.slice(src.indexOf("onClick: () => {"), shareCall);
+  assert.ok(!/await/.test(handler), "no await may precede share(), or activation is spent");
+});
+
+await Promise.all(pending);
 console.log(`owner defects: ${pass} passed, ${fails.length} failed`);
 for (const f of fails) console.log("FAIL " + f);
 if (fails.length) process.exit(1);

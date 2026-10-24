@@ -188,10 +188,62 @@
             !!fr && String(fr.getAttribute("src") || "").startsWith("blob:"));
           const closeBtn = [...overlay.querySelectorAll("button")].find((b) => (b.textContent || "").trim() === "Close");
           ok("the viewer has a Close control", !!closeBtn);
+          // A blank white rectangle is what a failed load looks like, so the
+          // viewer must always offer a way out.
+          const dl = [...overlay.querySelectorAll("button")].find((b) => (b.textContent || "").trim() === "Download");
+          ok("the viewer offers a Download escape hatch", !!dl);
           closeBtn.click();
           await new Promise((r) => setTimeout(r, 200));
           ok("closing the viewer removes it", !document.querySelector(".viewer-overlay"));
         }
+
+        // ---- the viewer says it is opening -----------------------------------
+        // Called directly and inspected synchronously: the notice lives only
+        // until the frame paints, so any await here would race the very state
+        // being asserted.
+        const closeProbe = U.viewDocument(new Uint8Array([37, 80, 68, 70]), "probe.pdf");
+        const probeOverlay = document.querySelector(".viewer-overlay");
+        ok("the viewer shows an opening notice before the frame paints",
+          !!probeOverlay && !!probeOverlay.querySelector(".viewer-pending"));
+        ok("the opening notice is announced to a screen reader",
+          !!probeOverlay.querySelector(".viewer-pending") &&
+          /opening/i.test(probeOverlay.querySelector(".viewer-pending").textContent || ""));
+        const probeFrame = probeOverlay.querySelector(".viewer-frame");
+        probeFrame.dispatchEvent(new Event("load"));
+        ok("the notice clears once the frame has loaded",
+          !probeOverlay.querySelector(".viewer-pending"));
+        closeProbe();
+        ok("the probe viewer closes", !document.querySelector(".viewer-overlay"));
+
+        // ---- visible progress while work is in flight -------------------------
+        // The owner could not tell a slow PDF from a broken one. Work in flight
+        // must be observable, and must clear itself when the work ends.
+        U.beginWork();
+        await new Promise((r) => setTimeout(r, 200));
+        const bar = document.getElementById("global-progress");
+        ok("work in flight shows a global progress bar", !!bar && bar.classList.contains("is-visible"));
+        // Headless virtual time freezes CSS transitions, so the transition is
+        // dropped to read the winning opacity from the cascade.
+        const barOpacity = (() => { const t = bar.style.transition; bar.style.transition = "none";
+          const v = getComputedStyle(bar).opacity; bar.style.transition = t; return v; })();
+        ok("the progress bar is actually opaque while it shows", barOpacity === "1");
+        U.endWork();
+        await new Promise((r) => setTimeout(r, 200));
+        const bar2 = document.getElementById("global-progress");
+        ok("the progress bar clears when the work ends",
+          !!bar2 && !bar2.classList.contains("is-visible"));
+
+        // A busy button must change its label, otherwise the tap reads as ignored.
+        const busyProbe = document.createElement("button");
+        busyProbe.textContent = "View invoice";
+        document.body.appendChild(busyProbe);
+        const busyRun = U.withBusy(busyProbe, "Opening\u2026", () => new Promise((r) => setTimeout(r, 150)));
+        await new Promise((r) => setTimeout(r, 40));
+        ok("a working button says so", busyProbe.textContent === "Opening\u2026" && busyProbe.disabled);
+        await busyRun;
+        ok("a finished button returns to its own label",
+          busyProbe.textContent === "View invoice" && !busyProbe.disabled);
+        busyProbe.remove();
 
         // ---- revealElement / headerOffset ------------------------------------
         const probe = document.createElement("div");

@@ -11,7 +11,7 @@
 // validation failure is reported on the field that caused it rather than as a
 // bare "Line 1: enter a rate" the owner cannot act on.
 
-import { el, field, toast, viewDocument } from "../ui.js";
+import { el, field, toast, viewDocument, withBusy } from "../ui.js";
 import * as I from "../invoicing.js";
 import * as M from "../money.js";
 import * as S from "../service.js";
@@ -544,7 +544,7 @@ export async function renderInvoiceNew(main) {
 
     const saveBtn = el("button", { class: "btn primary large", type: "submit", text: "Save invoice" });
     const pdfBtn = el("button", { class: "btn secondary", type: "button", text: "Preview & generate PDF",
-      onClick: () => generate(true) });
+      onClick: () => generate(true, pdfBtn) });
 
     box.appendChild(field("Invoice number", numberField, "Assigned automatically. A used number is never reused."));
     box.appendChild(field("Invoice date", dateField));
@@ -594,48 +594,52 @@ export async function renderInvoiceNew(main) {
     }));
   }
 
-  async function generate(alsoPdf) {
+  async function generate(alsoPdf, button) {
     try {
-      const check = checkLines();
-      if (check.errors.length) {
-        pendingErrors = check.errors;
-        pendingProblems = check.problems;
-        // Send the owner to the step that holds the problem, with the field
-        // marked, instead of leaving an un-actionable message on another screen.
-        goTo(2);
-        return;
-      }
-      const parentId = await ensureParent();
-      const lineData = collectLines();
-      const invoice = await S.createInvoice(store, {
-        parentId, learnerId, lines: lineData,
-        invoiceDate: dateFieldValue(),
-        discountType: draft.discountType,
-        discountValue: draft.discountValue,
-      });
-      if (remember) {
-        try {
-          await S.saveParent(store, { parentId, name: selectedParent.name, surname: selectedParent.surname,
-            whatsapp: selectedParent.whatsapp, email: selectedParent.email,
-            defaultRateCents: M.parseMoneyToCents(lineData[0].rate || "0") });
-        } catch (err) { /* remembering a rate is best-effort */ }
-      }
-      await store.reload();
-      clearInvoiceDraft();
-      toast(`Invoice ${invoice.number_text} saved.`, "success");
-      if (alsoPdf) {
-        const fresh = store.invoices.find((i) => String(i.invoice_id) === String(invoice.invoice_id));
-        const bytes = await buildInvoicePdf(fresh, { rates: store.rates });
-        // The button says "Preview", so it must actually show the document. A
-        // bare download looks like nothing happened on a phone, where the
-        // download attribute is often ignored.
-        viewDocument(bytes, I.invoiceFilename(fresh));
-      }
-      navigate("invoices");
+      await withBusy(button, alsoPdf ? "Building the PDF\u2026" : "Saving\u2026", () => generateNow(alsoPdf));
     } catch (err) {
       // Honest failure: the user is told plainly and their input stays on screen.
       toast(errorMessage(err), "error");
     }
+  }
+
+  async function generateNow(alsoPdf) {
+    const check = checkLines();
+    if (check.errors.length) {
+      pendingErrors = check.errors;
+      pendingProblems = check.problems;
+      // Send the owner to the step that holds the problem, with the field
+      // marked, instead of leaving an un-actionable message on another screen.
+      goTo(2);
+      return;
+    }
+    const parentId = await ensureParent();
+    const lineData = collectLines();
+    const invoice = await S.createInvoice(store, {
+      parentId, learnerId, lines: lineData,
+      invoiceDate: dateFieldValue(),
+      discountType: draft.discountType,
+      discountValue: draft.discountValue,
+    });
+    if (remember) {
+      try {
+        await S.saveParent(store, { parentId, name: selectedParent.name, surname: selectedParent.surname,
+          whatsapp: selectedParent.whatsapp, email: selectedParent.email,
+          defaultRateCents: M.parseMoneyToCents(lineData[0].rate || "0") });
+      } catch (err) { /* remembering a rate is best-effort */ }
+    }
+    await store.reload();
+    clearInvoiceDraft();
+    toast(`Invoice ${invoice.number_text} saved.`, "success");
+    if (alsoPdf) {
+      const fresh = store.invoices.find((i) => String(i.invoice_id) === String(invoice.invoice_id));
+      const bytes = await buildInvoicePdf(fresh, { rates: store.rates });
+      // The button says "Preview", so it must actually show the document. A
+      // bare download looks like nothing happened on a phone, where the
+      // download attribute is often ignored.
+      viewDocument(bytes, I.invoiceFilename(fresh));
+    }
+    navigate("invoices");
   }
 
   function dateFieldValue() {
@@ -643,7 +647,7 @@ export async function renderInvoiceNew(main) {
     return node && node.value ? node.value : (draft.invoiceDate || M.todayIso());
   }
 
-  form.addEventListener("submit", (e) => { e.preventDefault(); generate(false); });
+  form.addEventListener("submit", (e) => { e.preventDefault(); generate(false, e.submitter || form.querySelector("button[type=submit]")); });
   drawStep();
   main.appendChild(form);
 }
